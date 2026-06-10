@@ -13,6 +13,10 @@ vitest.config.js
 
 # Docs that don't need to ship
 VISION.md
+PENDING.md
+
+# Claude Code settings
+.claude/
 
 # Scripts for local dev only
 scripts/
@@ -21,8 +25,10 @@ scripts/
 .vscode/
 .DS_Store
 
-# Screenshots and temp images
-image*.png
+# Assets — only icon.png and sidebar.svg are needed by the extension
+assets/screenshots/
+assets/icons/icon.svg
+assets/icons/README.md
 
 # Git
 gitignore
