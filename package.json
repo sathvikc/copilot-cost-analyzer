@@ -1,0 +1,121 @@
+{
+  "name": "copilot-cost-analyzer",
+  "displayName": "Copilot Cost Analyzer",
+  "description": "Visualize token costs, cache behavior, and tool call impact for GitHub Copilot Chat sessions.",
+  "version": "0.6.15",
+  "icon": "assets/icons/icon.png",
+  "publisher": "SathvikCheela",
+  "author": {
+    "name": "Sathvik C",
+    "email": "sathvikchinnu@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sathvikc/copilot-cost-analyzer.git"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:copilotCostAnalyzer.openPanel",
+    "onCommand:copilotCostAnalyzer.refresh"
+  ],
+  "categories": [
+    "Other",
+    "Machine Learning",
+    "Visualization"
+  ],
+  "keywords": [
+    "copilot",
+    "tokens",
+    "cache",
+    "cost",
+    "ai",
+    "analytics"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "copilotCostAnalyzer.openPanel",
+        "title": "Open Copilot Cost Analyzer",
+        "category": "Copilot Cost Analyzer",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "copilotCostAnalyzer.refresh",
+        "title": "Refresh Sessions",
+        "category": "Copilot Cost Analyzer",
+        "icon": "$(refresh)"
+      }
+    ],
+    "configuration": {
+      "title": "Copilot Cost Analyzer",
+      "properties": {
+        "copilotCostAnalyzer.autoSyncOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically scan and sync debug logs when VS Code starts."
+        },
+        "copilotCostAnalyzer.dataCutoffDate": {
+          "type": "string",
+          "default": "2026-06-01",
+          "description": "Sessions before this date are marked as 'Limited Data'. ISO 8601 format (YYYY-MM-DD)."
+        },
+        "copilotCostAnalyzer.debugLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable verbose debug logging in the extension and webview console."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "copilotCostAnalyzer",
+          "title": "Copilot Cost",
+          "icon": "assets/icons/sidebar.svg"
+        }
+      ]
+    },
+    "views": {
+      "copilotCostAnalyzer": [
+        {
+          "id": "copilotCostAnalyzerPanel",
+          "name": "Cost Analyzer",
+          "type": "webview"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "copilotCostAnalyzerPanel",
+        "contents": "Click to open the full Copilot Cost Analyzer panel.\n\n[$(graph) Open Panel](command:copilotCostAnalyzer.openPanel)"
+      }
+    ]
+  },
+  "scripts": {
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "build:vsix": "rm -f dist/copilot-cost-analyzer-*.vsix && npx @vscode/vsce package --out dist/",
+    "build": "npm run lint && npm run test && npm run build:vsix",
+    "install:vscode": "code --install-extension dist/copilot-cost-analyzer-*.vsix --force",
+    "dev:vscode": "npm run build:vsix && npm run install:vscode"
+  },
+  "dependencies": {
+    "lume-js": "^2.2.1",
+    "sql.js": "^1.13.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "@vscode/vsce": "^3.0.0",
+    "eslint": "^8.57.0",
+    "vitest": "^2.1.0"
+  }
+}

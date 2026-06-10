@@ -1,0 +1,28 @@
+# Build artifacts
+dist/
+*.vsix
+
+# Tests and test data
+tests/
+src/**/*.test.js
+coverage/
+
+# Config files not needed in extension
+vitest.config.js
+.eslintrc*
+
+# Docs that don't need to ship
+VISION.md
+
+# Scripts for local dev only
+scripts/
+
+# IDE / OS
+.vscode/
+.DS_Store
+
+# Screenshots and temp images
+image*.png
+
+# Git
+gitignore

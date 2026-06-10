@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="30 25 185 205">
+
+  <!-- Bar chart (4 bars) -->
+  <g transform="translate(0, 8)">
+    <rect x="62"  y="148" width="28" height="68"  rx="6" fill="#ffffff"/>
+    <rect x="98"  y="112" width="28" height="104" rx="6" fill="#ffffff"/>
+    <rect x="134" y="76"  width="28" height="140" rx="6" fill="#ffffff"/>
+    <rect x="170" y="132" width="28" height="84"  rx="6" fill="#ffffff"/>
+  </g>
+
+  <!-- Robot head (same coords as icon.svg) -->
+  <g transform="translate(42, 38)">
+    <rect x="0" y="8" width="52" height="44" rx="14" fill="#ffffff"/>
+    <line x1="26" y1="8" x2="26" y2="-2" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="26" cy="-4" r="5" fill="#ffffff"/>
+    <!-- Eyes: black = cutout -->
+    <circle cx="16" cy="26" r="5" fill="#000000"/>
+    <circle cx="36" cy="26" r="5" fill="#000000"/>
+    <!-- Mouth: black = cutout -->
+    <rect x="18" y="38" width="16" height="4" rx="2" fill="#000000"/>
+  </g>
+
+  <!-- Dollar cost badge (same coords as icon.svg) -->
+  <g transform="translate(186, 110)">
+    <circle cx="0" cy="0" r="22" fill="#ffffff"/>
+
+    <!--
+      Dollar sign: proper $ shape as cutout
+      - Vertical bar through center (extends slightly beyond circle top/bottom)
+      - Upper C: opens to the right  (Q bezier)
+      - Lower C: opens to the left   (Q bezier)
+    -->
+    <!-- Vertical bar -->
+    <rect x="-3.5" y="-19" width="7" height="38" rx="2" fill="#000000"/>
+    <!-- Upper C (opens right) -->
+    <path d="M -9,-13 Q -9,-19 0,-19 Q 9,-19 9,-13 Q 9,-7 0,-7"
+          stroke="#000000" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Lower C (opens left) -->
+    <path d="M 9,13 Q 9,19 0,19 Q -9,19 -9,13 Q -9,7 0,7"
+          stroke="#000000" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+</svg>

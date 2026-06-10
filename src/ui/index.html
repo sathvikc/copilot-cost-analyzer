@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'none'; style-src {{cspSource}} 'unsafe-inline'; script-src {{cspSource}} 'unsafe-inline'; font-src {{cspSource}};">
+  <title>Copilot Cost Analyzer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ===== HEADER ===== -->
+  <header class="app-header" role="banner">
+    <div class="header-left">
+      <h1 class="header-title">Copilot Cost Analyzer</h1>
+      <span class="header-stat" id="dash-total-aic" aria-label="Total AIC">— AIC</span>
+      <span class="header-stat" id="dash-total-cost" aria-label="Total estimated cost">— est.</span>
+    </div>
+    <div class="header-right">
+      <button id="btn-sync" class="btn btn-primary" aria-label="Sync sessions">↻ Sync</button>
+    </div>
+  </header>
+
+  <!-- ===== TOP FILTERS ===== -->
+  <nav class="top-filters" role="navigation" aria-label="Session filters">
+    <div class="filter-group">
+      <label for="filter-search" class="sr-only">Search sessions</label>
+      <input type="search" id="filter-search" class="filter-input" placeholder="Search sessions…"
+        data-bind="filterSearch" aria-label="Search sessions">
+
+      <label for="filter-workspace" class="sr-only">Filter by workspace</label>
+      <select id="filter-workspace" class="filter-select" data-bind="filterWorkspace" aria-label="Filter by workspace">
+        <option value="">All workspaces</option>
+      </select>
+    </div>
+
+    <div class="filter-group time-controls">
+      <div class="preset-buttons" role="group" aria-label="Time range presets">
+        <button class="preset-btn" data-preset="today" aria-label="Today">Today</button>
+        <button class="preset-btn" data-preset="week" aria-label="This week">Week</button>
+        <button class="preset-btn active" data-preset="month" aria-label="This month">Month</button>
+        <button class="preset-btn" data-preset="all" aria-label="All time">All</button>
+      </div>
+      <div class="time-nav">
+        <button id="nav-prev" class="btn btn-icon" aria-label="Previous period">‹</button>
+        <span id="time-range-label" class="time-label" aria-live="polite"></span>
+        <button id="nav-next" class="btn btn-icon" aria-label="Next period">›</button>
+        <button id="nav-custom" class="btn btn-icon" aria-label="Custom date range" title="Custom range">⚙</button>
+      </div>
+      <div id="custom-date-range" class="custom-date-range hidden">
+        <label for="filter-date-from" class="sr-only">From date</label>
+        <input type="date" id="filter-date-from" data-bind="filterDateFrom" aria-label="From date">
+        <span>–</span>
+        <label for="filter-date-to" class="sr-only">To date</label>
+        <input type="date" id="filter-date-to" data-bind="filterDateTo" aria-label="To date">
+      </div>
+    </div>
+
+    <div class="filter-group">
+      <span class="session-count" aria-live="polite">
+        <span data-bind="sessionCount">0</span> sessions
+      </span>
+    </div>
+  </nav>
+
+  <!-- ===== MAIN LAYOUT ===== -->
+  <div class="app-layout">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar" role="complementary" aria-label="Session list">
+      <div class="sidebar-header">
+        <button id="sidebar-toggle" class="btn btn-icon" aria-label="Toggle sidebar">☰</button>
+      </div>
+      <ul id="session-list" class="session-list" role="listbox" aria-label="Sessions"></ul>
+      <div id="resize-handle" class="resize-handle" role="separator" aria-label="Resize sidebar"></div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content" role="main">
+
+      <!-- Breadcrumb — full width, no padding offset -->
+      <nav class="breadcrumb" role="navigation" aria-label="Breadcrumb">
+        <span id="bc-dashboard" class="bc-link" tabindex="0" role="link">Dashboard</span>
+        <span id="bc-separator" class="bc-separator hidden" aria-hidden="true">›</span>
+        <span id="bc-session" class="bc-current hidden" aria-current="page"></span>
+      </nav>
+
+      <!-- Scrollable padded content -->
+      <div class="main-body">
+
+        <!-- ===== DASHBOARD VIEW ===== -->
+        <section id="dashboard-view" aria-label="Dashboard">
+
+          <!-- Summary cards -->
+          <div class="card-grid" role="region" aria-label="Summary statistics">
+            <div class="summary-card" role="group" aria-label="Sessions">
+              <div class="card-label">Sessions</div>
+              <div class="card-value" id="dash-session-count" data-bind="sessionCount">0</div>
+            </div>
+            <div class="summary-card" role="group" aria-label="LLM Calls">
+              <div class="card-label">LLM Calls</div>
+              <div class="card-value" id="dash-calls">—</div>
+            </div>
+            <div class="summary-card" role="group" aria-label="Input tokens">
+              <div class="card-label">Input</div>
+              <div class="card-value" id="dash-input">—</div>
+            </div>
+            <div class="summary-card" role="group" aria-label="Cached tokens">
+              <div class="card-label">Cached</div>
+              <div class="card-value" id="dash-cached">—</div>
+            </div>
+            <div class="summary-card" role="group" aria-label="Output tokens">
+              <div class="card-label">Output</div>
+              <div class="card-value" id="dash-output">—</div>
+            </div>
+            <div class="summary-card" role="group" aria-label="Estimated cost">
+              <div class="card-label">Est. Cost</div>
+              <div class="card-value" id="dash-cost">—</div>
+            </div>
+            <div class="summary-card" role="group" aria-label="AI Credits">
+              <div class="card-label">AI Credits</div>
+              <div class="card-value" id="dash-aic">—</div>
+            </div>
+          </div>
+
+          <!-- Model breakdown -->
+          <section class="dashboard-section" aria-label="Model breakdown">
+            <h2 class="section-title">Model Breakdown</h2>
+            <div id="dash-model-breakdown" class="model-breakdown-grid"></div>
+          </section>
+
+          <!-- Workspace & Tool tables (side-by-side) -->
+          <div class="dashboard-grid-2col">
+            <section class="dashboard-section" aria-label="Workspaces">
+              <h2 class="section-title">Workspaces</h2>
+              <div class="table-wrapper">
+                <table class="data-table" role="table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Workspace</th>
+                      <th scope="col" class="numeric">Sessions</th>
+                      <th scope="col" class="numeric">Calls</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dash-all-workspaces"></tbody>
+                </table>
+              </div>
+            </section>
+            <section class="dashboard-section" aria-label="Tools">
+              <h2 class="section-title">Tools</h2>
+              <div class="table-wrapper">
+                <table class="data-table" role="table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Tool</th>
+                      <th scope="col" class="numeric">Calls</th>
+                      <th scope="col" class="numeric">Total Size</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dash-all-tools"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <!-- Activity chart -->
+          <section class="dashboard-section" aria-label="Activity chart">
+            <h2 class="section-title" id="dash-activity-label">Activity</h2>
+            <div id="dash-daily-chart" class="daily-chart"></div>
+          </section>
+
+        </section><!-- /#dashboard-view -->
+
+        <!-- ===== SESSION DETAIL VIEW ===== -->
+        <section id="session-detail" class="hidden" aria-label="Session detail">
+
+          <!-- Detail header -->
+          <div class="detail-header">
+            <div class="detail-header-top">
+              <h2 id="detail-title" class="detail-title"></h2>
+              <div class="detail-badges">
+                <span id="badge-quality" class="badge badge-success hidden" role="status">✓ Good</span>
+                <span id="badge-subagent" class="badge badge-info hidden" role="status">ℹ Sub-agent</span>
+                <span id="badge-switch" class="badge badge-warning hidden" role="status">⇄ Model Switch</span>
+                <span id="badge-retry" class="badge badge-warning hidden" role="status">↻ retries</span>
+              </div>
+            </div>
+            <p id="detail-subtitle" class="detail-subtitle hidden"></p>
+            <div class="detail-meta">
+              <span id="detail-session-id" class="meta-pill copyable" tabindex="0" role="button"
+                aria-label="Copy session ID" title="Click to copy">
+                <span class="meta-label">ID</span> <code id="detail-sid-code"></code>
+              </span>
+              <span id="detail-ws" class="meta-pill copyable" tabindex="0" role="button"
+                aria-label="Copy workspace path" title="Click to copy">
+                <span class="meta-label">Workspace</span> <span id="detail-ws-name"></span>
+              </span>
+              <span class="meta-pill">
+                <span class="meta-label">Time</span> <span id="detail-time-range"></span>
+              </span>
+              <button id="btn-open-log" class="btn btn-secondary btn-sm hidden" aria-label="Open debug log">Open Log</button>
+              <button id="btn-reveal-chat" class="btn btn-secondary btn-sm hidden" aria-label="Reveal chat session"
+                title="Open this chat session in the Copilot panel">💬 Reveal Chat</button>
+            </div>
+          </div>
+
+          <!-- Summary cards -->
+          <div class="card-grid" role="region" aria-label="Session statistics">
+            <div class="summary-card" role="group" aria-label="LLM Calls">
+              <div class="card-label">LLM Calls</div>
+              <div class="card-value" id="card-calls" data-bind="cardCalls">—</div>
+            </div>
+            <div class="summary-card" role="group" aria-label="Input tokens">
+              <div class="card-label">Input</div>
+              <div class="card-value" id="card-input" data-bind="cardInput">—</div>
+            </div>
+            <div class="summary-card" role="group" aria-label="Cached tokens">
+              <div class="card-label">Cached</div>
+              <div class="card-value" id="card-cached" data-bind="cardCached">—</div>
+            </div>
+            <div class="summary-card" role="group" aria-label="Output tokens">
+              <div class="card-label">Output</div>
+              <div class="card-value" id="card-output" data-bind="cardOutput">—</div>
+            </div>
+            <div class="summary-card" role="group" aria-label="Cache hit percentage">
+              <div class="card-label">Cache Hit</div>
+              <div class="card-value" id="card-cache-hit" data-bind="cardCacheHit">—</div>
+            </div>
+            <div class="summary-card" role="group" aria-label="Estimated cost">
+              <div class="card-label">Est. Cost</div>
+              <div class="card-value" id="card-cost" data-bind="cardCost">—</div>
+            </div>
+            <div class="summary-card" role="group" aria-label="AI Credits">
+              <div class="card-label">AI Credits</div>
+              <div class="card-value" id="card-aic" data-bind="cardAic">—</div>
+            </div>
+          </div>
+
+          <p id="aic-discrepancy-note" class="note hidden">
+            ⚠ This session has retry calls — AIC may include retries not shown in the Copilot dashboard.
+          </p>
+
+          <!-- Tabs -->
+          <div class="tab-bar" role="tablist" aria-label="Session detail tabs">
+            <button class="tab-btn active" data-tab="timeline" role="tab" aria-selected="true"
+              aria-controls="tab-timeline">Timeline</button>
+            <button class="tab-btn" data-tab="models" role="tab" aria-selected="false"
+              aria-controls="tab-models">Models</button>
+            <button class="tab-btn" data-tab="cache" role="tab" aria-selected="false"
+              aria-controls="tab-cache">Cache</button>
+            <button class="tab-btn" data-tab="tools" role="tab" aria-selected="false"
+              aria-controls="tab-tools">Tools</button>
+            <button class="tab-btn" data-tab="switches" role="tab" aria-selected="false"
+              aria-controls="tab-switches">Switches</button>
+            <button class="tab-btn" data-tab="retries" role="tab" aria-selected="false"
+              aria-controls="tab-retries">Retries</button>
+            <button class="tab-btn" data-tab="conversation" role="tab" aria-selected="false"
+              aria-controls="tab-conversation">Conversation</button>
+          </div>
+
+          <!-- Tab: Models -->
+          <div id="tab-models" class="tab-content" role="tabpanel" aria-label="Model breakdown">
+            <div id="detail-model-breakdown" class="model-breakdown-grid"></div>
+          </div>
+
+          <!-- Tab: Timeline -->
+          <div id="tab-timeline" class="tab-content active" role="tabpanel" aria-label="Timeline">
+            <div class="timeline-toolbar">
+              <button id="expand-all" class="btn btn-secondary btn-sm" aria-label="Expand or collapse all turns">⊞ Expand</button>
+              <div class="filter-bar">
+                <div class="filter-dropdown" id="filter-aic">
+                  <button class="filter-toggle btn btn-secondary btn-sm" aria-label="Filter by AIC class"
+                    aria-haspopup="true">AIC <span class="filter-count">All</span></button>
+                  <div class="filter-panel" role="menu">
+                    <label><input type="checkbox" class="select-all" checked aria-label="Select all AIC classes"> <strong>Select All</strong></label>
+                    <div class="filter-divider"></div>
+                    <label><input type="checkbox" value="low" checked aria-label="Low AIC"> 🟢 Low</label>
+                    <label><input type="checkbox" value="moderate" checked aria-label="Moderate AIC"> 🟡 Moderate</label>
+                    <label><input type="checkbox" value="expensive" checked aria-label="Expensive AIC"> 🔴 Expensive</label>
+                    <label><input type="checkbox" value="none" checked aria-label="No AIC data"> ⚪ None</label>
+                  </div>
+                </div>
+                <div class="filter-dropdown" id="filter-tools">
+                  <button class="filter-toggle btn btn-secondary btn-sm" aria-label="Filter by tool"
+                    aria-haspopup="true">Tools <span class="filter-count">All</span></button>
+                  <div class="filter-panel" id="filter-tools-panel" role="menu"></div>
+                </div>
+                <div class="filter-dropdown" id="filter-activity">
+                  <button class="filter-toggle btn btn-secondary btn-sm" aria-label="Filter by activity type"
+                    aria-haspopup="true">Activity <span class="filter-count">All</span></button>
+                  <div class="filter-panel" role="menu">
+                    <label><input type="checkbox" class="select-all" checked aria-label="Select all activity types"> <strong>Select All</strong></label>
+                    <div class="filter-divider"></div>
+                    <label><input type="checkbox" value="hasModels" checked aria-label="LLM calls"> 🤖 LLM Calls</label>
+                    <label><input type="checkbox" value="hasSubAgent" checked aria-label="Sub-agent calls"> 🔗 Sub-Agent</label>
+                    <label><input type="checkbox" value="hasUserMessage" checked aria-label="User messages"> 👤 User Messages</label>
+                    <div class="filter-divider"></div>
+                    <label><input type="checkbox" value="showThinking" checked aria-label="Show thinking/reasoning"> 💭 Show Thinking</label>
+                  </div>
+                </div>
+                <button id="filter-reset" class="btn btn-secondary btn-sm" aria-label="Reset all filters">Reset</button>
+              </div>
+            </div>
+            <div id="timeline-container" class="timeline-container" role="region" aria-label="Turn timeline"></div>
+          </div>
+
+          <!-- Tab: Cache -->
+          <div id="tab-cache" class="tab-content" role="tabpanel" aria-label="Cache analysis">
+            <div class="cache-stats">
+              <span>Calls with cache data: <strong id="cache-calls-with-data">—</strong></span>
+              <span>Cache breaks: <strong id="cache-breaks">—</strong></span>
+            </div>
+            <canvas id="cache-sparkline" class="cache-sparkline" width="700" height="160"
+              aria-label="Cache sparkline chart" role="img"></canvas>
+            <h3 class="section-title cache-table-title">Cache Breaks</h3>
+            <div class="table-wrapper">
+              <table class="data-table" role="table">
+                <thead>
+                  <tr>
+                    <th scope="col" class="numeric">Turn</th>
+                    <th scope="col" class="numeric">Call #</th>
+                    <th scope="col">Model</th>
+                    <th scope="col" class="numeric">Input</th>
+                    <th scope="col" class="numeric">Cached</th>
+                    <th scope="col" class="numeric">Cache Δ</th>
+                    <th scope="col" class="numeric">Hit %</th>
+                    <th scope="col">Reason</th>
+                  </tr>
+                </thead>
+                <tbody id="cache-table-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Tab: Tools -->
+          <div id="tab-tools" class="tab-content" role="tabpanel" aria-label="Tool leaderboard">
+            <div class="table-wrapper">
+              <table class="data-table" role="table">
+                <thead>
+                  <tr>
+                    <th scope="col">Tool</th>
+                    <th scope="col" class="numeric">Calls</th>
+                    <th scope="col" class="numeric">Total Size</th>
+                    <th scope="col" class="numeric">Avg Size</th>
+                    <th scope="col" class="numeric">Max Size</th>
+                    <th scope="col" class="numeric">Compressed</th>
+                  </tr>
+                </thead>
+                <tbody id="tools-table-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Tab: Switches -->
+          <div id="tab-switches" class="tab-content" role="tabpanel" aria-label="Model switches">
+            <div class="table-wrapper">
+              <table class="data-table" role="table">
+                <thead>
+                  <tr>
+                    <th scope="col">#</th>
+                    <th scope="col">From</th>
+                    <th scope="col">To</th>
+                    <th scope="col" class="numeric">At Call</th>
+                    <th scope="col" class="numeric">Cache Before</th>
+                    <th scope="col" class="numeric">Cache After</th>
+                    <th scope="col" class="numeric">Preserved</th>
+                    <th scope="col" class="numeric">Input Δ</th>
+                  </tr>
+                </thead>
+                <tbody id="models-table-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Tab: Retries -->
+          <div id="tab-retries" class="tab-content" role="tabpanel" aria-label="Retry report">
+            <div id="retry-report"></div>
+          </div>
+
+          <!-- Tab: Conversation -->
+          <div id="tab-conversation" class="tab-content" role="tabpanel" aria-label="Conversation transcript">
+            <div id="conversation-container" class="conversation-container"></div>
+          </div>
+
+        </section><!-- /#session-detail -->
+
+      </div><!-- /.main-body -->
+
+      <!-- Built with lume.js — inside main content column only -->
+      <footer class="built-with" aria-label="Built with lume.js">
+        Built with <a href="https://sathvikc.github.io/lume-js/" class="built-with-link" target="_blank" rel="noopener">lume.js</a>
+      </footer>
+
+    </main>
+  </div><!-- /.app-layout -->
+
+  <!-- Toast notification -->
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <!-- App entry point -->
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
