@@ -156,10 +156,10 @@ class CostAnalyzerViewProvider {
  * @param {vscode.ExtensionContext} context
  */
 async function showPanel(context) {
+  const autoSync = vscode.workspace.getConfiguration('copilotCostAnalyzer').get('autoSyncOnStartup', true);
   if (panel) {
     panel.reveal(vscode.ViewColumn.One);
-    // Sync in background to catch new sessions since last open
-    runSyncAndNotify().catch(() => {});
+    if (autoSync) runSyncAndNotify().catch(() => {});
     return;
   }
 
@@ -260,7 +260,7 @@ async function showPanel(context) {
   });
 
   // Sync in background to catch any new sessions
-  runSyncAndNotify().catch(() => {});
+  if (autoSync) runSyncAndNotify().catch(() => {});
 
   panel.onDidDispose(() => {
     if (rpc) { rpc.dispose(); rpc = null; }
