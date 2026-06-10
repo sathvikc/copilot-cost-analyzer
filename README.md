@@ -12,6 +12,12 @@ A VS Code extension that visualizes **token costs**, **cache behavior**, and **t
 
 ---
 
+## Demo
+
+![Demo](assets/screenshots/demo.gif)
+
+---
+
 ## Features
 
 ### Session Dashboard
@@ -55,28 +61,34 @@ Classification uses a priority hierarchy: `compaction > model_switch > subagent_
 ## Screenshots
 
 ### Session Dashboard
-<!-- TODO: replace with real screenshot -->
-<!-- ![Session Dashboard](assets/screenshots/session-dashboard.png) -->
 
-> Shows all Copilot Chat sessions across workspaces with cost totals, token counts, model badges, and data quality indicators.
+![Session Dashboard](assets/screenshots/dashboard.png)
+
+> All sessions across workspaces with aggregate stats (total AIC, estimated cost), per-model breakdown with cache hit rates, workspace summary, tools leaderboard, and a weekly activity chart.
 
 ### Session Detail — Timeline Tab
-<!-- TODO: replace with real screenshot -->
-<!-- ![Timeline](assets/screenshots/timeline.png) -->
 
-> Turn-by-turn breakdown of every LLM call and tool execution with token deltas and thinking content toggle.
+![Timeline](assets/screenshots/session-timeline.png)
+
+> Turn-by-turn view of every LLM call with input/output/cache token counts, latency, AIC cost badge, and cold-start detection.
 
 ### Cache Break Analysis
-<!-- TODO: replace with real screenshot -->
-<!-- ![Cache Tab](assets/screenshots/cache-breaks.png) -->
 
-> Sparkline chart + per-call table showing exactly when and why the prompt cache broke (compaction, model switch, system prompt change, etc.).
+![Cache Tab](assets/screenshots/session-cache.png)
 
-### Tools Leaderboard
-<!-- TODO: replace with real screenshot -->
-<!-- ![Tools Tab](assets/screenshots/tools-leaderboard.png) -->
+> Sparkline chart + per-call table showing exactly when and why the prompt cache broke — with typed badges (`⚠ Possible Eviction`, `🛠 Tools Changed`, etc.) and cache delta per call.
 
-> Which tools ran most, how large their results were, and what compression method was used.
+### Model Breakdown
+
+![Model Breakdown](assets/screenshots/session-model-switch.png)
+
+> Per-model token and cost breakdown for sessions that switch models mid-conversation — with individual cache hit rates per model.
+
+### Conversation View
+
+![Conversation](assets/screenshots/session-conversation.png)
+
+> Full conversation replay — user prompts and Copilot responses side by side, with turn grouping and markdown rendering.
 
 ---
 
