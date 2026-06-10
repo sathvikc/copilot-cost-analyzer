@@ -26,3 +26,6 @@ tmp/
 
 # Generated demo database (regenerate with: node scripts/generate-demo-db.js)
 scripts/demo.db
+
+# Real DB backups (personal session data)
+scripts/db-backups/

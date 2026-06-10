@@ -105,7 +105,11 @@
     "build:vsix": "rm -f dist/copilot-cost-analyzer-*.vsix && npx @vscode/vsce package --out dist/",
     "build": "npm run lint && npm run test && npm run build:vsix",
     "install:vscode": "code --install-extension dist/copilot-cost-analyzer-*.vsix --force",
-    "dev:vscode": "npm run build:vsix && npm run install:vscode"
+    "dev:vscode": "npm run build:vsix && npm run install:vscode",
+    "db:demo": "node scripts/db-switch.js demo",
+    "db:restore": "node scripts/db-switch.js restore",
+    "db:backup": "node scripts/db-switch.js backup",
+    "db:list": "node scripts/db-switch.js list"
   },
   "dependencies": {
     "lume-js": "^2.2.1",
