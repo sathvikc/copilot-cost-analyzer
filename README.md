@@ -160,32 +160,37 @@ The cutoff date is configurable via `copilotCostAnalyzer.dataCutoffDate`.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│  VS Code Extension Host                         │
-│                                                 │
-│  extension.js ─── RPC bridge ──→ Webview Panel  │
-│       │                              │          │
-│       ▼                              ▼          │
-│  ┌─────────┐    ┌──────────┐   ┌──────────┐    │
-│  │ sync.js │    │ session  │   │  UI (ES   │    │
-│  │ (scan + │───▶│ Api.js   │──▶│  modules) │    │
-│  │  parse) │    │          │   │           │    │
-│  └────┬────┘    └──────────┘   └──────────┘    │
-│       │                                         │
-│       ▼                                         │
-│  ┌─────────┐    ┌──────────┐                    │
-│  │ parser/ │    │ compute/ │                    │
-│  │ mainJsonl│───▶│ cost,aic │                    │
-│  │ models  │    │ metrics  │                    │
-│  └─────────┘    └──────────┘                    │
-│       │                                         │
-│       ▼                                         │
-│  ┌──────────────────────────┐                   │
-│  │  SQLite (sql.js)         │                   │
-│  │  copilot-analytics.db    │                   │
-│  │  16 migrations, 11 tables│                   │
-│  └──────────────────────────┘                   │
-└─────────────────────────────────────────────────┘
+Copilot debug logs  (VS Code workspaceStorage on disk)
+  main.jsonl · models.json · transcripts/*.jsonl · chatSessions/*.jsonl
+                          │
+                          ▼
+                      sync.js
+              discovers sessions, orchestrates parsing
+                          │
+           ┌──────────────┴──────────────┐
+           ▼                             ▼
+  mainJsonlParser.js            modelsJsonParser.js
+  LLM calls, tool calls,        pricing map +
+  user messages, switches,      per-call cost
+  cache breaks, transcripts
+           │                             │
+           └──────────────┬──────────────┘
+                          ▼
+                compute/ (cost, AIC, metrics)
+                          │
+                          ▼
+              SQLite — copilot-analytics.db
+                      (sql.js, 11 tables)
+                          │
+                          ▼
+                   sessionApi.js
+                 queries DB, formats data
+                          │
+              postMessage RPC  (shared/rpc.js)
+                          │
+                          ▼
+                  Webview Panel (ES modules)
+        Timeline · Cache · Tools · Switches · Conversation
 ```
 
 ### Tech Stack
@@ -195,7 +200,7 @@ The cutoff date is configurable via `copilotCostAnalyzer.dataCutoffDate`.
 | Language | Node.js / JavaScript (ES2022) |
 | UI | Webview Panel with ES modules |
 | Parser | Node.js `readline` for JSONL streaming |
-| Database | **sql.js** (pure JS SQLite, 16 migrations) |
+| Database | **sql.js** (pure JS SQLite, 11 tables) |
 | Charts | Hand-rolled `<canvas>` sparklines |
 | RPC | `postMessage`-based bridge (no HTTP server) |
 | Tests | **Vitest** (129 tests across 10 test files) |

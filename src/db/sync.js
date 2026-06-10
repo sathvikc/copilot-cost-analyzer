@@ -50,7 +50,17 @@ function discoverSessions() {
       if (fs.existsSync(wsJsonPath)) {
         try {
           const wsData = JSON.parse(fs.readFileSync(wsJsonPath, 'utf-8'));
-          workspacePath = (wsData.workspace || wsData.folder || null)?.replace(/^file:\/\//, '') || null;
+          const raw = wsData.workspace || wsData.folder || '';
+          if (raw) {
+            try {
+              // Use URL API to correctly decode percent-encoded paths (e.g. c%3A → c: on Windows)
+              const pathname = new URL(raw).pathname;
+              // Strip leading slash before Windows drive letters: /C:/Users → C:/Users
+              workspacePath = pathname.replace(/^\/([A-Za-z]:)/, '$1') || null;
+            } catch {
+              workspacePath = raw.replace(/^file:\/\/\//, '/') || null;
+            }
+          }
         } catch {
           // ignore parse errors
         }
@@ -581,32 +591,45 @@ function syncTranscripts(db, sessionId, workspaceHash) {
  * @param {string} [dataCutoffDate]
  * @returns {Promise<{ synced: number, skipped: number, errors: number }>}
  */
+let _syncInProgress = false;
+
 async function fullSync(db) {
+  if (_syncInProgress) {
+    log.warn('Sync already in progress — skipping concurrent call');
+    return { synced: 0, skipped: 0, errors: 0 };
+  }
+  _syncInProgress = true;
+
   const sessions = discoverSessions();
   let synced = 0;
   let skipped = 0;
   let errors = 0;
 
-  // Pre-compute global AIC ratio once for all sessions
-  const globalAicRatio = computeGlobalAicRatio(db);
+  try {
+    // Pre-compute global AIC ratio once for all sessions
+    const globalAicRatio = computeGlobalAicRatio(db);
 
-  for (const sessionInfo of sessions) {
-    try {
-      const didSync = await syncSession(db, sessionInfo, globalAicRatio);
-      if (didSync) {
-        synced++;
-        // Persist after each successful sync for crash safety
-        if (synced % 5 === 0) db.persist();
-      } else {
-        skipped++;
+    for (const sessionInfo of sessions) {
+      try {
+        const didSync = await syncSession(db, sessionInfo, globalAicRatio);
+        if (didSync) {
+          synced++;
+          // Persist after each successful sync for crash safety
+          if (synced % 5 === 0) db.persist();
+        } else {
+          skipped++;
+        }
+      } catch (err) {
+        log.error(`Sync error for session ${sessionInfo.sessionId}:`, err.message);
+        errors++;
       }
-    } catch (err) {
-      log.error(`Sync error for session ${sessionInfo.sessionId}:`, err.message);
-      errors++;
     }
+
+    db.persist();
+  } finally {
+    _syncInProgress = false;
   }
 
-  db.persist();
   return { synced, skipped, errors };
 }
 

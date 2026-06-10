@@ -39,8 +39,8 @@ describe('Database', () => {
       expect(db.tableExists('schema_version')).toBe(true);
     });
 
-    it('applies all migrations', () => {
-      expect(db.schemaVersion).toBe(16);
+    it('has no pending migrations on fresh install (schema.sql is the complete baseline)', () => {
+      expect(db.schemaVersion).toBe(0);
     });
 
     it('persists to disk', () => {

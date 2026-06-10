@@ -46,6 +46,7 @@ function activate(context) {
     }).catch(err => {
       console.error('[CopilotCostAnalyzer] DB init failed:', err);
       vscode.window.showErrorMessage(`Cost Analyzer DB init failed: ${err.message}`);
+      if (panel && rpc) rpc.notify('initError', { message: err.message });
       return { synced: 0, skipped: 0, errors: 1 };
     });
 
