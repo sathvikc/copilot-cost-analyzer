@@ -52,6 +52,34 @@ Classification uses a priority hierarchy: `compaction > model_switch > subagent_
 
 ---
 
+## Screenshots
+
+### Session Dashboard
+<!-- TODO: replace with real screenshot -->
+<!-- ![Session Dashboard](assets/screenshots/session-dashboard.png) -->
+
+> Shows all Copilot Chat sessions across workspaces with cost totals, token counts, model badges, and data quality indicators.
+
+### Session Detail — Timeline Tab
+<!-- TODO: replace with real screenshot -->
+<!-- ![Timeline](assets/screenshots/timeline.png) -->
+
+> Turn-by-turn breakdown of every LLM call and tool execution with token deltas and thinking content toggle.
+
+### Cache Break Analysis
+<!-- TODO: replace with real screenshot -->
+<!-- ![Cache Tab](assets/screenshots/cache-breaks.png) -->
+
+> Sparkline chart + per-call table showing exactly when and why the prompt cache broke (compaction, model switch, system prompt change, etc.).
+
+### Tools Leaderboard
+<!-- TODO: replace with real screenshot -->
+<!-- ![Tools Tab](assets/screenshots/tools-leaderboard.png) -->
+
+> Which tools ran most, how large their results were, and what compression method was used.
+
+---
+
 ## Data Sources
 
 The extension reads from Copilot's **debug log files** stored in VS Code's workspace storage:
