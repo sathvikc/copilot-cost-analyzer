@@ -9,7 +9,10 @@ extension is in active development.
 
 ## [Unreleased]
 
-## [0.6.16] - 2026-06-11
+## [0.7.0] - 2026-06-12
+
+### Added
+- **Works in dev containers and Codespaces** — the extension now finds your Copilot sessions when VS Code is running inside a dev container or GitHub Codespace, not just on a regular desktop install. Existing macOS, Windows, and Linux desktop behavior is unchanged.
 
 ### Fixed
 - **Cost always shows, even for older sessions** — sessions that didn't have billing data in their logs previously showed $0.00. They now show an estimated cost based on token pricing, marked with `~`.

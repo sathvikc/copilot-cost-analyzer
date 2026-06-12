@@ -133,6 +133,29 @@ VS Code has a built-in **Cache Explorer** (in `Agent Debug Logs`) that does **st
 - **Cost correlation** — tie cache breaks to dollar impact
 - **Aggregate statistics** — sparklines, break counts by type
 
+### Dev Containers & Codespaces
+
+The extension finds your sessions automatically in most setups. There are two cases:
+
+**1. You use Copilot Chat *inside* the container/Codespace** — nothing to configure. Copilot writes its logs to the container, and the extension finds them automatically.
+
+**2. Your Copilot history is on your computer (the host)** — the logs live on your machine, not in the container, so you mount them in. Add **one line** to the `mounts` array in your project's `.devcontainer/devcontainer.json` (pick the line for your host OS), then **Dev Containers: Rebuild Container**:
+
+```jsonc
+"mounts": [
+  // macOS host:
+  "source=${localEnv:HOME}/Library/Application Support/Code/User/workspaceStorage,target=${containerEnv:HOME}/.config/Code/User/workspaceStorage,type=bind,readonly=true"
+
+  // Windows host:
+  // "source=${localEnv:APPDATA}/Code/User/workspaceStorage,target=${containerEnv:HOME}/.config/Code/User/workspaceStorage,type=bind,readonly=true"
+
+  // Linux host:
+  // "source=${localEnv:HOME}/.config/Code/User/workspaceStorage,target=${containerEnv:HOME}/.config/Code/User/workspaceStorage,type=bind,readonly=true"
+]
+```
+
+The mount is **read-only** — nothing on your machine is modified. `${containerEnv:HOME}` resolves the container user automatically, so this works whether your container user is `node`, `vscode`, or anything else.
+
 ---
 
 ## Installation

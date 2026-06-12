@@ -1,0 +1,22 @@
+{
+  // Dev container for developing this extension while analyzing the HOST machine's
+  // Copilot data (Scenario A). The host's VS Code workspaceStorage is bind-mounted
+  // read-only into the container at the standard Linux path that src/utils/paths.js
+  // already scans (~/.config/Code/User/workspaceStorage), so the extension finds
+  // your real sessions with NO code change.
+  "name": "copilot-cost-analyzer",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+  "remoteUser": "node",
+
+  // Ensure the host source dir exists before Docker mounts it (no-op if present).
+  // Runs on the macOS host shell.
+  "initializeCommand": "mkdir -p \"$HOME/Library/Application Support/Code/User/workspaceStorage\"",
+
+  // Host (macOS) Copilot data -> container path the extension already checks.
+  // Read-only: the container only reads your sessions; it never writes to host data.
+  "mounts": [
+    "source=${localEnv:HOME}/Library/Application Support/Code/User/workspaceStorage,target=/home/node/.config/Code/User/workspaceStorage,type=bind,readonly=true"
+  ],
+
+  "postCreateCommand": "npm install"
+}

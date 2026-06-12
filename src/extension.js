@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const { Database } = require('./db/db');
 const { fullSync } = require('./db/sync');
+const { setGlobalStorageBase } = require('./utils/paths');
 const sessionApi = require('./api/sessionApi');
 const { createHostRpc } = require('./shared/rpc');
 
@@ -26,6 +27,9 @@ function activate(context) {
   try {
     // Initialize database
     const storageDir = context.globalStorageUri.fsPath;
+    // Register globalStorage path so workspaceStorage can be derived as a
+    // fallback when no standard desktop location exists (e.g. dev containers).
+    setGlobalStorageBase(storageDir);
     db = new Database(storageDir);
 
     // Start DB init + sync in the background; don't block panel opening
