@@ -1,6 +1,7 @@
 # Build artifacts
 dist/
 *.vsix
+.devcontainer/
 
 # Tests and test data
 tests/
