@@ -30,9 +30,12 @@ function computeGlobalAicRatio(db) {
  *
  * When actual AIC exists (from debug log), cost is derived from AIC (ground truth).
  * When AIC is missing, estimate from tokens using the global ratio.
+ * When globalAicRatio is 0 (no AIC data at all, e.g. pre-June installs), fall back
+ * to tokenBasedCost from pricing JSON so sessions don't show $0.
  *
  * @param {Object} session - Raw session row from DB
  * @param {number} globalAicRatio - Pre-computed global AIC-per-token ratio
+ * @param {number} [tokenBasedCost=0] - Token-pricing cost as fallback when AIC unavailable
  * @returns {{
  *   computedAic: number,
  *   computedCost: number,
@@ -40,7 +43,7 @@ function computeGlobalAicRatio(db) {
  *   cacheHitPct: number
  * }}
  */
-function computeSessionMetrics(session, globalAicRatio) {
+function computeSessionMetrics(session, globalAicRatio, tokenBasedCost = 0) {
   // AIC: use actual if available, otherwise estimate from tokens
   let computedAic = 0;
   let isAicApprox = false;
@@ -54,8 +57,8 @@ function computeSessionMetrics(session, globalAicRatio) {
     isAicApprox = computedAic > 0;
   }
 
-  // Cost: derived from AIC (1 credit = $0.01)
-  const computedCost = computedAic > 0 ? computedAic / 1e11 : 0;
+  // Cost: prefer AIC-derived; fall back to token-based pricing when no AIC data exists
+  const computedCost = computedAic > 0 ? computedAic / 1e11 : tokenBasedCost;
 
   // Cache hit: cached / input (not cached / (cached + input))
   const cacheHitPct = session.total_input_tokens > 0

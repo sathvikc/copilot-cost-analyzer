@@ -246,7 +246,7 @@ async function syncSession(db, sessionInfo, globalAicRatio) {
     total_output_tokens: totalOutputTokens,
     total_cached_tokens: totalCachedTokens
   };
-  const metrics = computeSessionMetrics(rawSession, globalAicRatio);
+  const metrics = computeSessionMetrics(rawSession, globalAicRatio, totalCost);
 
   // Determine data quality — based only on whether cache data is present
   const hasCacheData = parsed.llmCalls.some(c => c.cachedTokens !== null);
@@ -586,6 +586,32 @@ function syncTranscripts(db, sessionId, workspaceHash) {
 }
 
 /**
+ * After sync, recompute computed_aic / computed_cost / is_aic_approx for all sessions
+ * that don't have their own AIC data, using the current global ratio.
+ * This ensures approx estimates are always based on the latest globalAicRatio
+ * (which can change when new sessions with actual AIC data are first synced).
+ * @param {Object} db
+ * @param {number} globalAicRatio
+ */
+function recomputeApproxSessions(db, globalAicRatio) {
+  db.run(`
+    UPDATE sessions
+    SET
+      computed_aic = ROUND((total_input_tokens + total_output_tokens) * $ratio),
+      computed_cost = CASE
+        WHEN (total_input_tokens + total_output_tokens) * $ratio > 0
+          THEN (total_input_tokens + total_output_tokens) * $ratio / 1e11
+          ELSE total_cost
+        END,
+      is_aic_approx = CASE
+        WHEN (total_input_tokens + total_output_tokens) * $ratio > 0 THEN 1
+        ELSE 0
+        END
+    WHERE (total_aic IS NULL OR total_aic = 0)
+  `, { $ratio: globalAicRatio });
+}
+
+/**
  * Full sync: discover all sessions and sync each one.
  * @param {Object} db - Database instance
  * @returns {Promise<{ synced: number, skipped: number, errors: number }>}
@@ -605,7 +631,7 @@ async function fullSync(db) {
   let errors = 0;
 
   try {
-    // Pre-compute global AIC ratio once for all sessions
+    // Pre-compute global AIC ratio from existing data before parsing new sessions
     const globalAicRatio = computeGlobalAicRatio(db);
 
     for (const sessionInfo of sessions) {
@@ -624,6 +650,12 @@ async function fullSync(db) {
       }
     }
 
+    // Recompute approx metrics for ALL sessions without their own AIC data.
+    // Uses the updated ratio (post-sync) so sessions that were skipped (mtime unchanged)
+    // still benefit when new sessions with actual AIC data were parsed above.
+    const updatedRatio = computeGlobalAicRatio(db);
+    recomputeApproxSessions(db, updatedRatio);
+
     db.persist();
   } finally {
     _syncInProgress = false;
@@ -632,4 +664,4 @@ async function fullSync(db) {
   return { synced, skipped, errors };
 }
 
-module.exports = { discoverSessions, syncSession, fullSync };
+module.exports = { discoverSessions, syncSession, fullSync, recomputeApproxSessions };

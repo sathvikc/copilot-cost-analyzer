@@ -181,6 +181,9 @@ async function showPanel(context) {
 
   // --- RPC layer: typed request/response handlers ---
   rpc = createHostRpc(panel.webview);
+
+  // If sync is already running when the panel opens, notify it immediately
+  if (_syncInProgress) rpc.notify('syncStart');
   rpc.handle('getSessions', () => {
     if (!db) return [];
     return sessionApi.getSessions(db);
@@ -275,6 +278,7 @@ let _syncInProgress = false;
 async function runSyncAndNotify() {
   if (!db || _syncInProgress) return;
   _syncInProgress = true;
+  if (panel && rpc) rpc.notify('syncStart');
   try {
     const result = await fullSync(db);
     if (panel && rpc) {

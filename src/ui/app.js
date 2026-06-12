@@ -108,18 +108,24 @@ effect(() => {
 
 // --- RPC notification handlers ---
 
-rpc.on('syncComplete', () => {
+function setSyncingState(syncing) {
   const btn = document.getElementById('btn-sync');
-  if (btn) {
-    btn.disabled = false;
-    btn.textContent = '\u21BB Sync';
-    btn.classList.remove('syncing');
-  }
+  if (!btn) return;
+  btn.disabled = syncing;
+  btn.textContent = syncing ? '\u21BB Syncing\u2026' : '\u21BB Sync';
+  btn.classList.toggle('syncing', syncing);
+}
+
+rpc.on('syncStart', () => setSyncingState(true));
+
+rpc.on('syncComplete', () => {
+  setSyncingState(false);
   loadSessions();
   loadDashboard();
 });
 
 rpc.on('loading', () => {
+  setSyncingState(true);
   if (!store.selectedSessionId) {
     document.getElementById('dashboard-view')?.classList.remove('hidden');
     document.getElementById('session-detail')?.classList.add('hidden');
