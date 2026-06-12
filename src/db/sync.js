@@ -588,7 +588,6 @@ function syncTranscripts(db, sessionId, workspaceHash) {
 /**
  * Full sync: discover all sessions and sync each one.
  * @param {Object} db - Database instance
- * @param {string} [dataCutoffDate]
  * @returns {Promise<{ synced: number, skipped: number, errors: number }>}
  */
 let _syncInProgress = false;

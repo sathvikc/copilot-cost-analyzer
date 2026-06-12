@@ -9,6 +9,14 @@ extension is in active development.
 
 ## [Unreleased]
 
+### Fixed
+- **Cost display shows `~` prefix for limited-quality sessions** — sessions without `cachedTokens` data in debug logs had their cost silently overestimated (all input treated as fresh). Session detail cost card and dashboard cost card now prefix with `~` to signal this. Quality is auto-detected from the presence of `cachedTokens` in the log data.
+- **Dashboard header cost replaced static `est.` with conditional `~`** — `~` now only appears when at least one session in the filtered view has limited data quality, instead of always showing `est.`.
+- **Panel-open sync respects `autoSyncOnStartup` setting** — both the panel-reveal and panel-create paths now gate sync on the user's setting. Previously the setting was only respected on extension startup, not on subsequent panel opens.
+
+### Removed
+- **`copilotCostAnalyzer.dataCutoffDate` setting** — data quality was never date-driven. It is determined automatically by whether `cachedTokens` is present in the debug log. The setting has been removed.
+
 ## [0.6.15] - 2026-06-10
 
 ### Initial Public Release

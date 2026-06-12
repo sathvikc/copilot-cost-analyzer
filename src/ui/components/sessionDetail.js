@@ -92,7 +92,7 @@ export function renderSessionDetail() {
     store.cardInput = formatNumber(session.total_input_tokens);
     store.cardOutput = formatNumber(session.total_output_tokens);
     store.cardCached = session.total_cached_tokens != null ? formatNumber(session.total_cached_tokens) : '\u2014';
-    store.cardCost = formatCost(session.computed_cost);
+    store.cardCost = (session.data_quality === 'limited' ? '~' : '') + formatCost(session.computed_cost);
     store.cardAic = session.computed_aic > 0 ? (session.is_aic_approx ? '~' : '') + formatNumberWithCommas((session.computed_aic / 1e9).toFixed(2)) : '\u2014';
     store.cardCacheHit = session.cache_hit_pct > 0 ? session.cache_hit_pct.toFixed(1) + '%' : '\u2014';
 

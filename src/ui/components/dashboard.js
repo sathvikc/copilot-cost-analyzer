@@ -26,11 +26,13 @@ export function renderDashboard() {
   const approxCount = filtered.filter(x => x.is_aic_approx).length;
   const aicApprox = approxCount > 0;
   const aicPrefix = aicApprox ? '~' : '';
+  const hasLimited = filtered.some(x => x.data_quality === 'limited');
+  const costPrefix = hasLimited ? '~' : '';
 
   // Header stats
   setText('dash-session-count', totalSessions);
   const aicHeader = totalAic > 0 ? aicPrefix + formatNumberWithCommas((totalAic / 1e9).toFixed(2)) + ' AIC' : '\u2014 AIC';
-  const costHeader = totalCost > 0 ? '$' + totalCost.toFixed(4) + ' est.' : '\u2014 est.';
+  const costHeader = totalCost > 0 ? costPrefix + '$' + totalCost.toFixed(4) : '\u2014';
   const headerAicEl = document.getElementById('dash-total-aic');
   if (headerAicEl) {
     headerAicEl.textContent = aicHeader;
@@ -44,7 +46,7 @@ export function renderDashboard() {
   setCardValue('dash-input', formatCompact(totalInput), 'card-value');
   setCardValue('dash-output', formatCompact(totalOutput), 'card-value');
   setCardValue('dash-cached', formatCompact(totalCached), 'card-value value-success');
-  setCardValue('dash-cost', formatCost(totalCost), 'card-value value-accent');
+  setCardValue('dash-cost', costPrefix + formatCost(totalCost), 'card-value value-accent');
 
   const aicEl = document.getElementById('dash-aic');
   if (aicEl) {
