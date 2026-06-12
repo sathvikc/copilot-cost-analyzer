@@ -46,7 +46,7 @@ export function initStore(stateFn) {
     filterWorkspace: '',       // Workspace path filter
     filterDateFrom: '',        // Custom date range start
     filterDateTo: '',          // Custom date range end
-    timePreset: 'month',       // 'today' | 'week' | 'month' | 'all' | 'custom'
+    timePreset: 'all',         // 'today' | 'week' | 'month' | 'all' | 'custom'
     timeOffset: 0,             // Navigation offset for preset ranges
 
     // ── UI state ────────────────────────────────────────────────────

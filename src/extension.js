@@ -225,7 +225,7 @@ async function showPanel(context) {
     return sessionApi.exportSession(db, sessionId, { format, ...options });
   });
   rpc.handle('triggerSync', async () => {
-    await runSyncAndNotify();
+    await runSyncAndNotify({ manual: true });
     return { ok: true };
   });
   rpc.handle('revealChatSession', async ({ sessionId }) => {
@@ -273,9 +273,10 @@ async function showPanel(context) {
 
 /**
  * Run sync and notify the webview with results.
+ * @param {{ manual?: boolean }} [options]
  */
 let _syncInProgress = false;
-async function runSyncAndNotify() {
+async function runSyncAndNotify({ manual = false } = {}) {
   if (!db || _syncInProgress) return;
   _syncInProgress = true;
   if (panel && rpc) rpc.notify('syncStart');
@@ -284,10 +285,18 @@ async function runSyncAndNotify() {
     if (panel && rpc) {
       rpc.notify('syncComplete', result);
     }
-    if (result.synced > 0 || result.errors > 0) {
-      vscode.window.showInformationMessage(
-        `Copilot Cost Analyzer — Synced: ${result.synced}, Skipped: ${result.skipped}, Errors: ${result.errors}`
-      );
+    let msg;
+    if (result.synced > 0 && result.errors > 0) {
+      msg = `Synced ${result.synced} session${result.synced === 1 ? '' : 's'}, ${result.errors} error${result.errors === 1 ? '' : 's'}`;
+    } else if (result.synced > 0) {
+      msg = `Synced ${result.synced} new session${result.synced === 1 ? '' : 's'}`;
+    } else if (result.errors > 0) {
+      msg = `Sync completed with ${result.errors} error${result.errors === 1 ? '' : 's'}`;
+    } else {
+      msg = 'Everything is up to date';
+    }
+    if (manual || result.synced > 0 || result.errors > 0) {
+      vscode.window.showInformationMessage(`Copilot Cost Analyzer — ${msg}`);
     }
   } catch (err) {
     vscode.window.showErrorMessage(`Sync failed: ${err.message}`);

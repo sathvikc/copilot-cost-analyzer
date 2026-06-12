@@ -9,13 +9,18 @@ extension is in active development.
 
 ## [Unreleased]
 
+## [0.6.16] - 2026-06-11
+
 ### Fixed
-- **Cost display shows `~` prefix for limited-quality sessions** — sessions without `cachedTokens` data in debug logs had their cost silently overestimated (all input treated as fresh). Session detail cost card and dashboard cost card now prefix with `~` to signal this. Quality is auto-detected from the presence of `cachedTokens` in the log data.
-- **Dashboard header cost replaced static `est.` with conditional `~`** — `~` now only appears when at least one session in the filtered view has limited data quality, instead of always showing `est.`.
-- **Panel-open sync respects `autoSyncOnStartup` setting** — both the panel-reveal and panel-create paths now gate sync on the user's setting. Previously the setting was only respected on extension startup, not on subsequent panel opens.
+- **Cost always shows, even for older sessions** — sessions that didn't have billing data in their logs previously showed $0.00. They now show an estimated cost based on token pricing, marked with `~`.
+- **Cost marked `~` only when data is incomplete** — the `~` prefix now only appears when the extension cannot confirm the exact cost for a session (incomplete log data). Sessions with full data show exact costs without the prefix.
+- **Sync button shows "Syncing…" from the moment sync starts** — previously the button only showed the syncing state when you clicked it manually. On first open, it now shows syncing while the background scan is running.
+- **Syncing cost estimates stay accurate as you add sessions** — syncing a session with billing data now immediately updates the cost estimates of all older sessions, so figures stay consistent without needing a manual re-sync.
+- **Manual sync always confirms what happened** — clicking Sync now always shows a result message ("Everything is up to date", "Synced 5 new sessions", etc.) instead of silently doing nothing when there were no new sessions.
+- **"Open panel" setting is respected on every open** — the Auto-sync on startup setting was previously only applied once at startup; it now applies every time you open the panel.
 
 ### Removed
-- **`copilotCostAnalyzer.dataCutoffDate` setting** — data quality was never date-driven. It is determined automatically by whether `cachedTokens` is present in the debug log. The setting has been removed.
+- **`copilotCostAnalyzer.dataCutoffDate` setting** — this setting had no effect. Data quality is determined automatically from what's available in the session logs, not from a date threshold.
 
 ## [0.6.15] - 2026-06-10
 
