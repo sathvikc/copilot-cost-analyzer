@@ -2,7 +2,7 @@
   "name": "copilot-cost-analyzer",
   "displayName": "Copilot Cost Analyzer",
   "description": "Visualize token costs, cache behavior, and tool call impact for GitHub Copilot Chat sessions.",
-  "version": "0.6.15",
+  "version": "0.7.0",
   "icon": "assets/icons/icon.png",
   "publisher": "SathvikCheela",
   "author": {
@@ -101,6 +101,7 @@
     "build": "npm run lint && npm run test && npm run build:vsix",
     "install:vscode": "code --install-extension dist/copilot-cost-analyzer-*.vsix --force",
     "dev:vscode": "npm run build:vsix && npm run install:vscode",
+    "test:container": "docker run --rm -e HOME=/home/node -v \"$PWD\":/work -w /work -v \"$HOME/Library/Application Support/Code/User/workspaceStorage\":/home/node/.config/Code/User/workspaceStorage:ro node:20 node scripts/container-smoke-test.js",
     "db:demo": "node scripts/db-switch.js demo",
     "db:restore": "node scripts/db-switch.js restore",
     "db:backup": "node scripts/db-switch.js backup",

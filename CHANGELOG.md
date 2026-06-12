@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 with the following constraint: **all versions are 0.x.x** (pre-1.0) while the
 extension is in active development.
 
-## [Unreleased]
-
 ## [0.7.0] - 2026-06-12
 
 ### Added
