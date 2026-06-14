@@ -258,13 +258,16 @@ async function syncDebugLogSession(db, sessionInfo, globalAicRatio) {
   const mainJsonlPath = path.join(debugLogPath, 'main.jsonl');
   const currentFileSize = fs.existsSync(mainJsonlPath) ? fs.statSync(mainJsonlPath).size : 0;
 
-  // Check sync log: skip if mtime hasn't changed, file_size hasn't changed, AND parser version matches
+  // Check sync log: skip if mtime hasn't changed, file_size hasn't changed, AND parser version matches.
+  // source_path is also compared so that an estimated chatSessions row (whose sync_log points at the
+  // chatSessions file) is always re-synced once debug-logs appear — this forces the estimated → full
+  // upgrade even if the other fields happen to line up.
   const existing = db.queryOne(
-    'SELECT main_jsonl_mtime, file_size, parser_version FROM sync_log WHERE session_id = $sid',
+    'SELECT main_jsonl_mtime, file_size, parser_version, source_path FROM sync_log WHERE session_id = $sid',
     { $sid: sessionId }
   );
 
-  if (existing && existing.main_jsonl_mtime >= mainJsonlMtime && existing.file_size === currentFileSize && existing.parser_version === PARSER_VERSION) {
+  if (existing && existing.source_path === debugLogPath && existing.main_jsonl_mtime >= mainJsonlMtime && existing.file_size === currentFileSize && existing.parser_version === PARSER_VERSION) {
     return false; // up to date
   }
 
