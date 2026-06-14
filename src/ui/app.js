@@ -140,14 +140,33 @@ function isSetupNoticeVisible() {
   return !document.getElementById('setup-notice')?.classList.contains('hidden');
 }
 
-function showSetupNotice(mode) {
+function showSetupNotice(mode, estimatedCount = 0) {
   const notice = document.getElementById('setup-notice');
   if (!notice) return;
   document.getElementById('setup-disabled')?.classList.toggle('hidden', mode !== 'disabled');
   document.getElementById('setup-empty')?.classList.toggle('hidden', mode !== 'empty');
+  if (mode === 'disabled') updateEstimatedCta(estimatedCount);
   notice.classList.remove('hidden');
   document.getElementById('dashboard-view')?.classList.add('hidden');
   document.getElementById('session-detail')?.classList.add('hidden');
+}
+
+/**
+ * Show/hide the Option B opt-in ("View N sessions anyway") inside the disabled
+ * setup notice and fill in the count. Hidden entirely when no estimated
+ * sessions were found, so the CTA only appears when it can deliver something.
+ */
+function updateEstimatedCta(count) {
+  const cta = document.getElementById('setup-estimated');
+  if (!cta) return;
+  cta.classList.toggle('hidden', count <= 0);
+  if (count <= 0) return;
+  const plural = count === 1 ? '' : 's';
+  const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+  set('setup-estimated-count', String(count));
+  set('setup-estimated-plural', plural);
+  set('btn-view-estimated-count', String(count));
+  set('btn-view-estimated-plural', plural);
 }
 
 function hideSetupNotice() {
@@ -160,16 +179,23 @@ function hideSetupNotice() {
 }
 
 /**
- * Decide whether to show the setup notice. Only relevant when there are zero
- * sessions. The "disabled" state is safe to show immediately (a user with data
- * always has logging enabled); the "enabled but empty" state waits for the first
- * sync to finish so it doesn't flash while the DB is still initializing.
+ * Decide whether to show the setup notice.
+ *
+ * Sessions split into two kinds: "full" (debug-logs, source_type !== 'chatSessions')
+ * and "estimated" (chatSessions fallback). The matrix:
+ *   - logging ON  → show whatever we have; estimated old sessions render normally.
+ *   - logging OFF + full sessions exist → still show them (old real data is valuable).
+ *   - logging OFF + only estimated      → show Option A first, with an opt-in CTA
+ *                                          ("View N anyway"); reveal them once opted in.
+ *   - logging OFF + nothing             → plain disabled notice.
+ *
+ * The "enabled but empty" state waits for the first sync to finish so it doesn't
+ * flash while the DB is still initializing.
  */
 async function updateSetupNotice() {
-  if (store.sessions.length > 0) {
-    hideSetupNotice();
-    return;
-  }
+  const fullCount = store.sessions.filter(s => s.source_type !== 'chatSessions').length;
+  const estimatedCount = store.sessions.length - fullCount;
+
   let status;
   try {
     status = await rpc.call('getSetupStatus');
@@ -177,13 +203,20 @@ async function updateSetupNotice() {
     hideSetupNotice();
     return;
   }
-  if (!status.debugLoggingEnabled) {
-    showSetupNotice('disabled');
-  } else if (syncEverCompleted) {
-    showSetupNotice('empty');
-  } else {
-    hideSetupNotice();
+
+  if (status.debugLoggingEnabled) {
+    if (store.sessions.length > 0) hideSetupNotice();
+    else if (syncEverCompleted) showSetupNotice('empty');
+    else hideSetupNotice();
+    return;
   }
+
+  // Logging is off.
+  if (fullCount > 0 || store.estimatedOptIn) {
+    hideSetupNotice();
+    return;
+  }
+  showSetupNotice('disabled', estimatedCount);
 }
 
 // --- Data loading ---

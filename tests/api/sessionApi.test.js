@@ -225,6 +225,8 @@ describe('sessionApi', () => {
       expect(result[0].computed_aic).toBe(3e9);
       expect(result[0].is_aic_approx).toBe(0);
       expect(result[0].data_quality).toBe('full');
+      // source_type is surfaced so the UI can split full vs. estimated sessions.
+      expect(result[0].source_type).toBe('debug-logs');
     });
   });
 

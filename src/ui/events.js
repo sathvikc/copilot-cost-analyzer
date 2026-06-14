@@ -50,6 +50,17 @@ export function setupEventListeners(opts = {}) {
   document.getElementById('btn-setup-recheck')?.addEventListener('click', triggerSync);
   document.getElementById('btn-setup-recheck-2')?.addEventListener('click', triggerSync);
 
+  // Option B opt-in: reveal estimated sessions without enabling debug logging.
+  // Latches store.estimatedOptIn so updateSetupNotice() keeps the dashboard up,
+  // then runs a sync to pick up any chatSessions not yet persisted.
+  document.getElementById('btn-view-estimated')?.addEventListener('click', () => {
+    store.estimatedOptIn = true;
+    document.getElementById('setup-notice')?.classList.add('hidden');
+    document.getElementById('dashboard-view')?.classList.remove('hidden');
+    document.getElementById('session-detail')?.classList.add('hidden');
+    triggerSync();
+  });
+
   // Click the setting id to copy it
   const settingId = document.getElementById('setup-setting-id');
   if (settingId) {

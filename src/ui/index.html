@@ -118,6 +118,21 @@
                 <li>Start or continue a Copilot Chat session so new logs get written.</li>
                 <li>Come back and hit <strong>Re-check</strong>.</li>
               </ol>
+              <!-- Option B: opt-in to estimated sessions reconstructed from Copilot's
+                   always-written chat store. Hidden until at least one is found. -->
+              <div id="setup-estimated" class="setup-estimated hidden">
+                <p class="setup-estimated-desc">
+                  Don't want to enable logging? We found
+                  <strong id="setup-estimated-count">0</strong>
+                  past session<span id="setup-estimated-plural">s</span> in Copilot's chat
+                  history. We can show those now with <strong>estimated</strong> cost and
+                  tokens — cache, retries, and sub-agent detail still need debug logs.
+                </p>
+                <button id="btn-view-estimated" class="btn btn-secondary"
+                  aria-label="View estimated sessions anyway">
+                  View <span id="btn-view-estimated-count">0</span> session<span id="btn-view-estimated-plural">s</span> anyway (estimated)
+                </button>
+              </div>
             </div>
 
             <!-- State: enabled but no sessions parsed yet -->

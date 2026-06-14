@@ -627,6 +627,21 @@ select:focus-visible,
 }
 .setup-steps strong { color: var(--fg); }
 
+/* Option B opt-in — separated from the primary (enable-logging) flow */
+.setup-estimated {
+  margin-top: var(--space-lg);
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--border);
+}
+
+.setup-estimated-desc {
+  font-size: var(--font-size-sm);
+  color: var(--muted);
+  margin: 0 0 var(--space-md);
+  line-height: 1.6;
+}
+.setup-estimated-desc strong { color: var(--fg); }
+
 /* --- Model Cards --- */
 .model-breakdown-grid {
   display: grid;

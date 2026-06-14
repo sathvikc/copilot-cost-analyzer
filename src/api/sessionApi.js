@@ -212,7 +212,7 @@ function getSessions(db) {
         s.total_output_tokens, s.total_cached_tokens, s.total_cache_write_tokens, s.total_cost, s.total_aic,
         s.computed_aic, s.computed_cost, s.is_aic_approx, s.cache_hit_pct,
         s.subagent_counts_json,
-        s.data_quality, s.has_model_switch, s.has_subagent, s.source_path,
+        s.data_quality, s.source_type, s.has_model_switch, s.has_subagent, s.source_path,
         COALESCE((SELECT COUNT(*) FROM llm_calls lc WHERE lc.session_id = s.session_id AND lc.debug_name LIKE '%retry%'), 0) AS retry_count
       FROM sessions s
       ORDER BY s.start_time DESC

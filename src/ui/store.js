@@ -54,6 +54,7 @@ export function initStore(stateFn) {
     sessionCount: 0,           // Derived: filtered session count (bound to DOM)
     activeTab: 'timeline',     // Active tab in session detail view
     timelineExpanded: false,   // Whether timeline turns are expanded
+    estimatedOptIn: false,     // User chose "view estimated sessions anyway" (Option B)
 
     // ── View-model (formatted strings, bound to DOM via data-bind) ──
     // These bridge raw session data → display text. Set by renderSessionDetail().
