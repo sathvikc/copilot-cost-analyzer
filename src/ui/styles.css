@@ -543,6 +543,90 @@ select:focus-visible,
   font-size: var(--font-size-sm);
 }
 
+/* --- Setup Notice (debug logs disabled / no data yet) --- */
+.setup-notice {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--space-xl) var(--space-md);
+}
+
+.setup-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-xl);
+  max-width: 560px;
+  width: 100%;
+  text-align: center;
+}
+
+.setup-icon {
+  font-size: 40px;
+  line-height: 1;
+  margin-bottom: var(--space-md);
+}
+
+.setup-title {
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  margin-bottom: var(--space-sm);
+}
+
+.setup-desc {
+  font-size: var(--font-size-sm);
+  color: var(--muted);
+  line-height: 1.6;
+  margin-bottom: var(--space-lg);
+}
+
+.setup-setting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-lg);
+}
+
+.setup-setting-label {
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+
+.setup-setting-id {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--font-size-xs);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  cursor: pointer;
+  word-break: break-all;
+  color: var(--fg);
+}
+.setup-setting-id:hover { border-color: var(--accent); }
+
+.setup-actions {
+  display: flex;
+  gap: var(--space-sm);
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: var(--space-lg);
+}
+
+.setup-steps {
+  text-align: left;
+  display: inline-block;
+  margin: 0 auto;
+  padding-left: var(--space-lg);
+  font-size: var(--font-size-sm);
+  color: var(--muted);
+  line-height: 1.8;
+}
+.setup-steps strong { color: var(--fg); }
+
 /* --- Model Cards --- */
 .model-breakdown-grid {
   display: grid;

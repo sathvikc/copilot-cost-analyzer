@@ -118,7 +118,9 @@ function setSyncingState(syncing) {
 
 rpc.on('syncStart', () => setSyncingState(true));
 
+let syncEverCompleted = false;
 rpc.on('syncComplete', () => {
+  syncEverCompleted = true;
   setSyncingState(false);
   loadSessions();
   loadDashboard();
@@ -126,11 +128,63 @@ rpc.on('syncComplete', () => {
 
 rpc.on('loading', () => {
   setSyncingState(true);
-  if (!store.selectedSessionId) {
+  if (!store.selectedSessionId && !isSetupNoticeVisible()) {
     document.getElementById('dashboard-view')?.classList.remove('hidden');
     document.getElementById('session-detail')?.classList.add('hidden');
   }
 });
+
+// --- Setup notice (Copilot debug logs disabled / no data yet) ---
+
+function isSetupNoticeVisible() {
+  return !document.getElementById('setup-notice')?.classList.contains('hidden');
+}
+
+function showSetupNotice(mode) {
+  const notice = document.getElementById('setup-notice');
+  if (!notice) return;
+  document.getElementById('setup-disabled')?.classList.toggle('hidden', mode !== 'disabled');
+  document.getElementById('setup-empty')?.classList.toggle('hidden', mode !== 'empty');
+  notice.classList.remove('hidden');
+  document.getElementById('dashboard-view')?.classList.add('hidden');
+  document.getElementById('session-detail')?.classList.add('hidden');
+}
+
+function hideSetupNotice() {
+  const notice = document.getElementById('setup-notice');
+  if (!notice || notice.classList.contains('hidden')) return;
+  notice.classList.add('hidden');
+  if (!store.selectedSessionId) {
+    document.getElementById('dashboard-view')?.classList.remove('hidden');
+  }
+}
+
+/**
+ * Decide whether to show the setup notice. Only relevant when there are zero
+ * sessions. The "disabled" state is safe to show immediately (a user with data
+ * always has logging enabled); the "enabled but empty" state waits for the first
+ * sync to finish so it doesn't flash while the DB is still initializing.
+ */
+async function updateSetupNotice() {
+  if (store.sessions.length > 0) {
+    hideSetupNotice();
+    return;
+  }
+  let status;
+  try {
+    status = await rpc.call('getSetupStatus');
+  } catch {
+    hideSetupNotice();
+    return;
+  }
+  if (!status.debugLoggingEnabled) {
+    showSetupNotice('disabled');
+  } else if (syncEverCompleted) {
+    showSetupNotice('empty');
+  } else {
+    hideSetupNotice();
+  }
+}
 
 // --- Data loading ---
 
@@ -152,6 +206,7 @@ async function loadSessions() {
     if (window.__DEBUG__) console.log('[ui] sessions loaded:', sessions.length);
     store.sessions = sessions || [];
     updateDateRange(store.sessions);
+    updateSetupNotice();
   } catch (err) {
     if (window.__DEBUG__) console.error('[ui] getSessions error:', err);
   }

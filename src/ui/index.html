@@ -89,6 +89,54 @@
       <!-- Scrollable padded content -->
       <div class="main-body">
 
+        <!-- ===== SETUP NOTICE (Copilot debug logs disabled / no data yet) ===== -->
+        <section id="setup-notice" class="setup-notice hidden" aria-label="Setup required">
+          <div class="setup-card" role="alert">
+
+            <!-- State: debug logging disabled -->
+            <div id="setup-disabled" class="setup-state">
+              <div class="setup-icon" aria-hidden="true">📊</div>
+              <h2 class="setup-title">Copilot debug logging is off</h2>
+              <p class="setup-desc">
+                Copilot Cost Analyzer reads token, cache, and cost data from GitHub Copilot
+                Chat's <strong>debug logs</strong>. Copilot only writes those logs when debug
+                file logging is enabled — so right now there's nothing to analyze.
+              </p>
+              <div class="setup-setting">
+                <span class="setup-setting-label">Enable this setting</span>
+                <code id="setup-setting-id" class="setup-setting-id copyable" tabindex="0"
+                  role="button" aria-label="Copy setting id" title="Click to copy">
+                  github.copilot.chat.agentDebugLog.fileLogging.enabled
+                </code>
+              </div>
+              <div class="setup-actions">
+                <button id="btn-open-copilot-setting" class="btn btn-primary" aria-label="Open setting in VS Code settings">⚙ Open Setting</button>
+                <button id="btn-setup-recheck" class="btn btn-secondary" aria-label="Re-check for sessions">↻ Re-check</button>
+              </div>
+              <ol class="setup-steps">
+                <li>Click <strong>Open Setting</strong> and turn the checkbox <strong>on</strong>.</li>
+                <li>Start or continue a Copilot Chat session so new logs get written.</li>
+                <li>Come back and hit <strong>Re-check</strong>.</li>
+              </ol>
+            </div>
+
+            <!-- State: enabled but no sessions parsed yet -->
+            <div id="setup-empty" class="setup-state hidden">
+              <div class="setup-icon" aria-hidden="true">✅</div>
+              <h2 class="setup-title">All set — waiting for your first session</h2>
+              <p class="setup-desc">
+                Copilot debug logging is enabled, but no Copilot Chat sessions have been
+                logged yet. Start a chat in Copilot, then re-check and your cost breakdown
+                will appear here.
+              </p>
+              <div class="setup-actions">
+                <button id="btn-setup-recheck-2" class="btn btn-primary" aria-label="Re-check for sessions">↻ Re-check</button>
+              </div>
+            </div>
+
+          </div>
+        </section><!-- /#setup-notice -->
+
         <!-- ===== DASHBOARD VIEW ===== -->
         <section id="dashboard-view" aria-label="Dashboard">
 

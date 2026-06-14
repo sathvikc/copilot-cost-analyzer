@@ -6,7 +6,7 @@
  */
 
 /**
- * @typedef {'getSessions'|'getSessionDetail'|'getDashboard'|'getModelCatalog'|'getAgentResponses'|'getDiscoveryEvents'|'getTranscripts'|'triggerSync'|'exportSession'|'openDebugLog'|'showNotification'} RpcMethod
+ * @typedef {'getSessions'|'getSessionDetail'|'getDashboard'|'getModelCatalog'|'getAgentResponses'|'getDiscoveryEvents'|'getTranscripts'|'triggerSync'|'exportSession'|'openDebugLog'|'showNotification'|'getSetupStatus'|'openCopilotDebugSetting'} RpcMethod
  */
 
 /**

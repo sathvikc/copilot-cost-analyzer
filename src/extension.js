@@ -14,6 +14,13 @@ const sessionApi = require('./api/sessionApi');
 const { createHostRpc } = require('./shared/rpc');
 
 const PANEL_VIEW_TYPE = 'copilotCostAnalyzer.panel';
+
+// Copilot Chat must have file logging enabled for it to write the debug-logs/
+// directories this extension reads. When it's off, there are no logs to analyze
+// and the panel would otherwise look blank. We surface this setting so users can
+// enable it in one click.
+const COPILOT_DEBUG_SETTING = 'github.copilot.chat.agentDebugLog.fileLogging.enabled';
+
 let panel = null;
 let rpc = null;
 let db = null;
@@ -265,6 +272,22 @@ async function showPanel(context) {
     }
     return { ok: true };
   });
+  rpc.handle('getSetupStatus', () => ({
+    debugLoggingEnabled: isCopilotDebugLoggingEnabled(),
+    settingId: COPILOT_DEBUG_SETTING
+  }));
+  rpc.handle('openCopilotDebugSetting', async () => {
+    try {
+      // Passing the setting id opens the Settings UI filtered to exactly that
+      // setting, so the user lands on the toggle directly.
+      await vscode.commands.executeCommand('workbench.action.openSettings', COPILOT_DEBUG_SETTING);
+      return { opened: true };
+    } catch (err) {
+      console.warn('[ext] openCopilotDebugSetting failed:', err.message);
+      vscode.window.showWarningMessage('Could not open settings: ' + err.message);
+      return { opened: false, error: err.message };
+    }
+  });
 
   // Sync in background to catch any new sessions
   if (autoSync) runSyncAndNotify().catch(() => {});
@@ -316,6 +339,23 @@ async function runSyncAndNotify({ manual = false } = {}) {
 function isDebugEnabled() {
   const config = vscode.workspace.getConfiguration('copilotCostAnalyzer');
   return config.get('debugLogging', false);
+}
+
+/**
+ * Check whether Copilot Chat's debug file logging is enabled. When it is off,
+ * Copilot never writes the debug-logs/ this extension parses, so the panel has
+ * no data to show. Returns false if the setting is missing (e.g. Copilot Chat
+ * not installed) or unreadable.
+ * @returns {boolean}
+ */
+function isCopilotDebugLoggingEnabled() {
+  try {
+    return vscode.workspace
+      .getConfiguration('github.copilot.chat')
+      .get('agentDebugLog.fileLogging.enabled') === true;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -6,6 +6,7 @@ import { store } from './store.js';
 import { clampTimeOffset, updateTimeLabel, updateFilterCounts, applyFilters } from './filters.js';
 import { renderCacheSparkline, renderSessionTools, renderSessionModelSwitches, renderRetryReport, renderCacheTable } from './components/tabs.js';
 import { renderSessionModelBreakdown } from './components/sessionDetail.js';
+import { copyText } from './helpers.js';
 
 /**
  * Set up all DOM event listeners.
@@ -15,19 +16,47 @@ import { renderSessionModelBreakdown } from './components/sessionDetail.js';
 export function setupEventListeners(opts = {}) {
   const { rpc } = opts;
 
-  // Sync button
-  const syncBtn = document.getElementById('btn-sync');
-  if (syncBtn) {
-    syncBtn.addEventListener('click', () => {
+  // Trigger a sync (shared by the header Sync button and setup-notice Re-check).
+  const triggerSync = () => {
+    const syncBtn = document.getElementById('btn-sync');
+    if (syncBtn) {
       syncBtn.disabled = true;
       syncBtn.textContent = '\u21BB Syncing\u2026';
       syncBtn.classList.add('syncing');
-      rpc.call('triggerSync').catch(err => {
-        if (window.__DEBUG__) console.error('[ui] triggerSync error:', err);
+    }
+    rpc.call('triggerSync').catch(err => {
+      if (window.__DEBUG__) console.error('[ui] triggerSync error:', err);
+      if (syncBtn) {
         syncBtn.disabled = false;
         syncBtn.textContent = '\u21BB Sync';
         syncBtn.classList.remove('syncing');
-      });
+      }
+    });
+  };
+
+  // Sync button
+  document.getElementById('btn-sync')?.addEventListener('click', triggerSync);
+
+  // --- Setup notice (Copilot debug logs disabled / no data yet) ---
+
+  // Open the exact Copilot setting in VS Code's Settings UI
+  document.getElementById('btn-open-copilot-setting')?.addEventListener('click', () => {
+    rpc.call('openCopilotDebugSetting').catch(err => {
+      if (window.__DEBUG__) console.error('[ui] openCopilotDebugSetting error:', err);
+    });
+  });
+
+  // Re-check buttons just re-run a sync; syncComplete re-evaluates the notice
+  document.getElementById('btn-setup-recheck')?.addEventListener('click', triggerSync);
+  document.getElementById('btn-setup-recheck-2')?.addEventListener('click', triggerSync);
+
+  // Click the setting id to copy it
+  const settingId = document.getElementById('setup-setting-id');
+  if (settingId) {
+    const copySetting = () => copyText(settingId.textContent.trim(), 'Setting');
+    settingId.addEventListener('click', copySetting);
+    settingId.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); copySetting(); }
     });
   }
 
