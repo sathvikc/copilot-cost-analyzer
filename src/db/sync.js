@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const { parseSessionDirectory } = require('../api/parser/mainJsonlParser');
+const { parseChatSessionFile } = require('../api/parser/chatSessionParser');
 const { loadPricing, computeCallCost } = require('../api/compute/costComputer');
 const { computeGlobalAicRatio, computeSessionMetrics } = require('../api/compute/sessionMetrics');
 const { getWorkspaceStoragePaths, findWorkspaceFile } = require('../utils/paths');
@@ -224,16 +225,33 @@ function parseChatSession(sessionId, workspaceHash) {
 }
 
 /**
- * Sync a single session: parse debug logs, compute costs, insert into DB.
+ * Sync a single session. Dispatches by source:
+ *   - 'chatSessions' → estimated fallback (no cache/AIC) via syncChatSession.
+ *   - anything else  → full debug-logs path via syncDebugLogSession.
  * @param {Object} db - Database instance
  * @param {Object} sessionInfo - From discoverSessions()
  * @param {number} [globalAicRatio] - Pre-computed AIC-per-token ratio for estimating missing AIC
  * @returns {Promise<boolean>} true if synced, false if skipped (up to date)
  */
-const PARSER_VERSION = 30; // bump when parser logic changes to force re-sync
+const PARSER_VERSION = 30; // bump when debug-logs parser logic changes to force re-sync
+const CHAT_PARSER_VERSION = 1; // bump when chatSessions parser logic changes to force re-sync
 
 async function syncSession(db, sessionInfo, globalAicRatio) {
   if (globalAicRatio === undefined) globalAicRatio = 0;
+  if (sessionInfo.source === 'chatSessions') {
+    return syncChatSession(db, sessionInfo, globalAicRatio);
+  }
+  return syncDebugLogSession(db, sessionInfo, globalAicRatio);
+}
+
+/**
+ * Sync a single debug-logs session: parse main.jsonl, compute costs, insert into DB.
+ * @param {Object} db - Database instance
+ * @param {Object} sessionInfo - From discoverSessions() with source 'debug-logs'
+ * @param {number} globalAicRatio - Pre-computed AIC-per-token ratio for estimating missing AIC
+ * @returns {Promise<boolean>} true if synced, false if skipped (up to date)
+ */
+async function syncDebugLogSession(db, sessionInfo, globalAicRatio) {
   const { sessionId, workspaceHash, workspacePath, debugLogPath, mainJsonlMtime } = sessionInfo;
 
   // Get current file size for incremental sync tracking
@@ -312,8 +330,177 @@ async function syncSession(db, sessionInfo, globalAicRatio) {
 
   // Wrap all writes in a transaction for atomicity
   db.transaction(() => {
+    deleteSessionRows(db, sessionId);
 
-  // Delete old session data (explicit child deletes + CASCADE as backup)
+    insertSessionRow(db, {
+      $sid: sessionId,
+      $wh: workspaceHash,
+      $wp: workspacePath,
+      $title: sessionTitle || parsed.userMessages[0]?.content || null,
+      $st: parsed.firstTs,
+      $et: parsed.lastTs,
+      $models: JSON.stringify([...modelsUsed]),
+      $calls: parsed.llmCalls.length,
+      $input: totalInputTokens,
+      $output: totalOutputTokens,
+      $cached: totalCachedTokens,
+      $cacheWrite: parsed.llmCalls.some(c => c.cacheWriteTokens !== null)
+        ? parsed.llmCalls.reduce((s, c) => s + (c.cacheWriteTokens || 0), 0)
+        : null,
+      $cost: totalCost,
+      $aic: totalAic,
+      $compAic: Math.round(metrics.computedAic),
+      $compCost: metrics.computedCost,
+      $isApprox: metrics.isAicApprox ? 1 : 0,
+      $cacheHit: metrics.cacheHitPct,
+      $subagentCounts: parsed.subagentCounts && Object.keys(parsed.subagentCounts).length > 0
+        ? JSON.stringify(parsed.subagentCounts)
+        : null,
+      $quality: dataQuality,
+      $hasSwitch: parsed.modelSwitches.length > 0 ? 1 : 0,
+      $hasSub: parsed.hasSubagent ? 1 : 0,
+      $src: debugLogPath,
+      $srcType: 'debug-logs',
+      $prompt: parsed.userMessages[0]?.content || null,
+      $copilotVer: parsed.sessionMeta?.copilotVersion || null,
+      $vscodeVer: parsed.sessionMeta?.vscodeVersion || null,
+      $mode: chatData.mode,
+      $location: chatData.initialLocation
+    });
+
+    insertLlmCalls(db, parsed.llmCalls);
+    insertToolCalls(db, parsed.toolCalls);
+    insertModelSwitches(db, parsed.modelSwitches);
+    insertUserMessages(db, sessionId, parsed.userMessages, canceledTurns);
+    insertAgentResponses(db, sessionId, parsed.agentResponses || []);
+    insertDiscoveryEvents(db, sessionId, parsed.discoveryEvents || []);
+
+    // Sync model catalog from models.json + full transcript replay
+    syncModelCatalog(db, pricingPath);
+    syncTranscripts(db, sessionId, workspaceHash);
+
+    upsertSyncLog(db, {
+      sessionId,
+      sourcePath: debugLogPath,
+      mtime: mainJsonlMtime,
+      totalLines: parsed.totalLines,
+      fileSize: currentFileSize,
+      parserVersion: PARSER_VERSION
+    });
+  }); // end transaction
+
+  return true;
+}
+
+/**
+ * Sync a single chatSessions-only session (estimated fallback). Copilot always
+ * writes chatSessions/<id>.jsonl regardless of the agentDebugLog setting, so this
+ * surfaces sessions that have no debug-logs. There is no cache split, no AIC and
+ * no token pricing — cost/AIC are estimated downstream from the global ratio and
+ * the row is flagged `source_type='chatSessions'`, `data_quality='limited'`.
+ *
+ * @param {Object} db - Database instance
+ * @param {Object} sessionInfo - From discoverSessions() with source 'chatSessions'
+ * @param {number} globalAicRatio - Pre-computed AIC-per-token ratio for estimating AIC
+ * @returns {Promise<boolean>} true if synced, false if skipped (up to date)
+ */
+async function syncChatSession(db, sessionInfo, globalAicRatio) {
+  const { sessionId, workspaceHash, workspacePath, chatSessionPath, chatSessionMtime } = sessionInfo;
+
+  const currentFileSize = fs.existsSync(chatSessionPath) ? fs.statSync(chatSessionPath).size : 0;
+
+  // sync_log is keyed on the chatSessions file mtime/size + CHAT_PARSER_VERSION.
+  // (parser_version differs from debug-logs, so if debug-logs appear later the
+  // mismatch forces a re-sync that upgrades the row — see T6.)
+  const existing = db.queryOne(
+    'SELECT main_jsonl_mtime, file_size, parser_version FROM sync_log WHERE session_id = $sid',
+    { $sid: sessionId }
+  );
+  if (existing && existing.main_jsonl_mtime >= chatSessionMtime
+      && existing.file_size === currentFileSize && existing.parser_version === CHAT_PARSER_VERSION) {
+    return false; // up to date
+  }
+
+  const parsed = parseChatSessionFile(chatSessionPath, sessionId);
+  if (parsed.llmCalls.length === 0) {
+    return false; // nothing ran in this session yet
+  }
+
+  const modelsUsed = new Set(parsed.llmCalls.map(c => c.model));
+  const totalInputTokens = parsed.llmCalls.reduce((s, c) => s + c.inputTokens, 0);
+  const totalOutputTokens = parsed.llmCalls.reduce((s, c) => s + c.outputTokens, 0);
+
+  // No AIC and no cache data → cost is purely estimated from the global ratio.
+  const rawSession = {
+    total_aic: null,
+    total_input_tokens: totalInputTokens,
+    total_output_tokens: totalOutputTokens,
+    total_cached_tokens: null
+  };
+  const metrics = computeSessionMetrics(rawSession, globalAicRatio, 0);
+
+  db.transaction(() => {
+    deleteSessionRows(db, sessionId);
+
+    insertSessionRow(db, {
+      $sid: sessionId,
+      $wh: workspaceHash,
+      $wp: workspacePath,
+      $title: parsed.title || parsed.firstPrompt || null,
+      $st: parsed.firstTs,
+      $et: parsed.lastTs,
+      $models: JSON.stringify([...modelsUsed]),
+      $calls: parsed.llmCalls.length,
+      $input: totalInputTokens,
+      $output: totalOutputTokens,
+      $cached: null,       // no cache split in chatSessions
+      $cacheWrite: null,
+      $cost: 0,            // no token pricing alongside chatSessions
+      $aic: null,          // estimated downstream
+      $compAic: Math.round(metrics.computedAic),
+      $compCost: metrics.computedCost,
+      $isApprox: metrics.isAicApprox ? 1 : 0,
+      $cacheHit: metrics.cacheHitPct,
+      $subagentCounts: null,
+      $quality: 'limited',
+      $hasSwitch: parsed.modelSwitches.length > 0 ? 1 : 0,
+      $hasSub: 0,          // sub-agents are not recorded in chatSessions
+      $src: chatSessionPath,
+      $srcType: 'chatSessions',
+      $prompt: parsed.firstPrompt || null,
+      $copilotVer: null,
+      $vscodeVer: null,
+      $mode: parsed.mode,
+      $location: parsed.initialLocation
+    });
+
+    insertLlmCalls(db, parsed.llmCalls);
+    insertToolCalls(db, parsed.toolCalls);
+    insertModelSwitches(db, parsed.modelSwitches);
+    // chatSessions carries no cancel cross-reference → no canceled turns.
+    insertUserMessages(db, sessionId, parsed.userMessages, new Set());
+    insertAgentResponses(db, sessionId, parsed.agentResponses || []);
+
+    upsertSyncLog(db, {
+      sessionId,
+      sourcePath: chatSessionPath,
+      mtime: chatSessionMtime,
+      totalLines: parsed.totalLines,
+      fileSize: currentFileSize,
+      parserVersion: CHAT_PARSER_VERSION
+    });
+  }); // end transaction
+
+  return true;
+}
+
+/* ------------------------------------------------------------------ *
+ * Shared row writers — used by both syncDebugLogSession and
+ * syncChatSession so the two paths persist through identical SQL.
+ * ------------------------------------------------------------------ */
+
+/** Delete a session and all its child rows (explicit deletes + CASCADE backup). */
+function deleteSessionRows(db, sessionId) {
   db.run('DELETE FROM llm_calls WHERE session_id = $sid', { $sid: sessionId });
   db.run('DELETE FROM tool_calls WHERE session_id = $sid', { $sid: sessionId });
   db.run('DELETE FROM model_switches WHERE session_id = $sid', { $sid: sessionId });
@@ -322,8 +509,10 @@ async function syncSession(db, sessionInfo, globalAicRatio) {
   db.run('DELETE FROM discovery_events WHERE session_id = $sid', { $sid: sessionId });
   db.run('DELETE FROM transcripts WHERE session_id = $sid', { $sid: sessionId });
   db.run('DELETE FROM sessions WHERE session_id = $sid', { $sid: sessionId });
+}
 
-  // Insert session
+/** Insert one sessions row. `fields` uses the $-prefixed bind names below. */
+function insertSessionRow(db, fields) {
   db.run(`
     INSERT INTO sessions (
       session_id, workspace_hash, workspace_path, title, start_time, end_time,
@@ -331,7 +520,7 @@ async function syncSession(db, sessionInfo, globalAicRatio) {
       total_cached_tokens, total_cache_write_tokens, total_cost, total_aic,
       computed_aic, computed_cost, is_aic_approx, cache_hit_pct,
       subagent_counts_json,
-      data_quality, has_model_switch, has_subagent, source_path, first_prompt,
+      data_quality, has_model_switch, has_subagent, source_path, source_type, first_prompt,
       copilot_version, vscode_version, mode, initial_location
     ) VALUES (
       $sid, $wh, $wp, $title, $st, $et,
@@ -339,46 +528,15 @@ async function syncSession(db, sessionInfo, globalAicRatio) {
       $cached, $cacheWrite, $cost, $aic,
       $compAic, $compCost, $isApprox, $cacheHit,
       $subagentCounts,
-      $quality, $hasSwitch, $hasSub, $src, $prompt,
+      $quality, $hasSwitch, $hasSub, $src, $srcType, $prompt,
       $copilotVer, $vscodeVer, $mode, $location
     )
-  `, {
-    $sid: sessionId,
-    $wh: workspaceHash,
-    $wp: workspacePath,
-    $title: sessionTitle || parsed.userMessages[0]?.content || null,
-    $st: parsed.firstTs,
-    $et: parsed.lastTs,
-    $models: JSON.stringify([...modelsUsed]),
-    $calls: parsed.llmCalls.length,
-    $input: totalInputTokens,
-    $output: totalOutputTokens,
-    $cached: totalCachedTokens,
-    $cacheWrite: parsed.llmCalls.some(c => c.cacheWriteTokens !== null)
-      ? parsed.llmCalls.reduce((s, c) => s + (c.cacheWriteTokens || 0), 0)
-      : null,
-    $cost: totalCost,
-    $aic: totalAic,
-    $compAic: Math.round(metrics.computedAic),
-    $compCost: metrics.computedCost,
-    $isApprox: metrics.isAicApprox ? 1 : 0,
-    $cacheHit: metrics.cacheHitPct,
-    $subagentCounts: parsed.subagentCounts && Object.keys(parsed.subagentCounts).length > 0
-      ? JSON.stringify(parsed.subagentCounts)
-      : null,
-    $quality: dataQuality,
-    $hasSwitch: parsed.modelSwitches.length > 0 ? 1 : 0,
-    $hasSub: parsed.hasSubagent ? 1 : 0,
-    $src: debugLogPath,
-    $prompt: parsed.userMessages[0]?.content || null,
-    $copilotVer: parsed.sessionMeta?.copilotVersion || null,
-    $vscodeVer: parsed.sessionMeta?.vscodeVersion || null,
-    $mode: chatData.mode,
-    $location: chatData.initialLocation
-  });
+  `, fields);
+}
 
-  // Insert LLM calls
-  for (const call of parsed.llmCalls) {
+/** Insert all LLM calls for a session. */
+function insertLlmCalls(db, calls) {
+  for (const call of calls) {
     db.run(`
       INSERT INTO llm_calls (
         session_id, turn_number, call_number, model, input_tokens,
@@ -416,9 +574,11 @@ async function syncSession(db, sessionInfo, globalAicRatio) {
       $timeSincePrev: call.timeSincePrev !== null ? call.timeSincePrev : null
     });
   }
+}
 
-  // Insert tool calls
-  for (const tool of parsed.toolCalls) {
+/** Insert all tool calls for a session. */
+function insertToolCalls(db, tools) {
+  for (const tool of tools) {
     db.run(`
       INSERT INTO tool_calls (
         session_id, turn_number, tool_name, args_preview, result_size,
@@ -445,9 +605,11 @@ async function syncSession(db, sessionInfo, globalAicRatio) {
       $resultText: tool.resultText || null
     });
   }
+}
 
-  // Insert model switches
-  for (const sw of parsed.modelSwitches) {
+/** Insert all model switches for a session. */
+function insertModelSwitches(db, switches) {
+  for (const sw of switches) {
     db.run(`
       INSERT INTO model_switches (
         session_id, from_model, to_model, at_call_number,
@@ -467,11 +629,16 @@ async function syncSession(db, sessionInfo, globalAicRatio) {
       $ts: sw.timestamp
     });
   }
+}
 
-  // Insert user messages (with cancel flag from chatSessions cross-reference)
-  for (let i = 0; i < parsed.userMessages.length; i++) {
-    const msg = parsed.userMessages[i];
-    // chatSessions request indices are 0-based; our userMessages array is also ordered by turn
+/**
+ * Insert user messages for a session. `canceledTurns` is a Set of 0-based turn
+ * indices flagged canceled (debug-logs cross-reference); pass an empty Set when
+ * there is no cancel data (chatSessions).
+ */
+function insertUserMessages(db, sessionId, userMessages, canceledTurns) {
+  for (let i = 0; i < userMessages.length; i++) {
+    const msg = userMessages[i];
     const isCanceled = canceledTurns.has(i) ? 1 : 0;
     db.run(`
       INSERT INTO user_messages (session_id, turn_number, content, timestamp, is_canceled)
@@ -484,9 +651,11 @@ async function syncSession(db, sessionInfo, globalAicRatio) {
       $canceled: isCanceled
     });
   }
+}
 
-  // Insert agent responses
-  for (const resp of (parsed.agentResponses || [])) {
+/** Insert agent responses for a session. */
+function insertAgentResponses(db, sessionId, agentResponses) {
+  for (const resp of agentResponses) {
     db.run(`
       INSERT INTO agent_responses (
         session_id, turn_number, response_text, reasoning_text, timestamp, span_id, parent_span_id
@@ -503,9 +672,11 @@ async function syncSession(db, sessionInfo, globalAicRatio) {
       $parentSpanId: resp.parentSpanId
     });
   }
+}
 
-  // Insert discovery events
-  for (const disc of (parsed.discoveryEvents || [])) {
+/** Insert discovery events for a session. */
+function insertDiscoveryEvents(db, sessionId, discoveryEvents) {
+  for (const disc of discoveryEvents) {
     db.run(`
       INSERT INTO discovery_events (
         session_id, event_type, event_name, details, timestamp
@@ -520,30 +691,22 @@ async function syncSession(db, sessionInfo, globalAicRatio) {
       $ts: disc.timestamp
     });
   }
+}
 
-  // Sync model catalog from models.json
-  syncModelCatalog(db, pricingPath);
-
-  // Sync transcripts
-  syncTranscripts(db, sessionId, workspaceHash);
-
-  // Update sync log
+/** Upsert the sync_log row that gates incremental re-sync. */
+function upsertSyncLog(db, { sessionId, sourcePath, mtime, totalLines, fileSize, parserVersion }) {
   db.run(`
     INSERT OR REPLACE INTO sync_log (session_id, source_path, main_jsonl_mtime, total_lines, file_size, parser_version, synced_at)
     VALUES ($sid, $src, $mtime, $lines, $fsize, $pver, $now)
   `, {
     $sid: sessionId,
-    $src: debugLogPath,
-    $mtime: mainJsonlMtime,
-    $lines: parsed.totalLines,
-    $fsize: currentFileSize,
-    $pver: PARSER_VERSION,
+    $src: sourcePath,
+    $mtime: mtime,
+    $lines: totalLines,
+    $fsize: fileSize,
+    $pver: parserVersion,
     $now: Math.floor(Date.now() / 1000)
   });
-
-  }); // end transaction
-
-  return true;
 }
 
 /**
