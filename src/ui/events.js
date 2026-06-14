@@ -50,19 +50,38 @@ export function setupEventListeners(opts = {}) {
     });
   });
 
-  // Re-check buttons just re-run a sync; syncComplete re-evaluates the notice
-  document.getElementById('btn-setup-recheck')?.addEventListener('click', triggerSync);
-  document.getElementById('btn-setup-recheck-2')?.addEventListener('click', triggerSync);
+  // Re-check: "have I enabled logging yet?" Only pull from disk once logging is
+  // actually on (so it picks up the freshly-written debug-logs). While it's still
+  // off, just re-evaluate the notice from the DB — never a full filesystem sync,
+  // so re-checking can't silently import logs the user hasn't opted into.
+  const recheck = () => {
+    rpc.call('getSetupStatus')
+      .then(status => {
+        if (status?.debugLoggingEnabled) triggerSync();
+        else window.__refreshSetup?.();
+      })
+      .catch(() => triggerSync());
+  };
+  document.getElementById('btn-setup-recheck')?.addEventListener('click', recheck);
+  document.getElementById('btn-setup-recheck-2')?.addEventListener('click', recheck);
 
-  // Option B opt-in: reveal estimated sessions without enabling debug logging.
-  // Latches store.estimatedOptIn so updateSetupNotice() keeps the dashboard up,
-  // then runs a sync to pick up any chatSessions not yet persisted.
+  // Option B opt-in: reveal estimated sessions that are ALREADY loaded in the
+  // store (the CTA only appears when estimatedCount > 0). This is a pure UI
+  // reveal — no sync — so it never imports debug-logs from disk.
   document.getElementById('btn-view-estimated')?.addEventListener('click', () => {
     store.estimatedOptIn = true;
+    // Remember the choice so reopening the panel skips the notice.
+    rpc.call('setEstimatedOptIn', { value: true }).catch(() => {});
     document.getElementById('setup-notice')?.classList.add('hidden');
     document.getElementById('dashboard-view')?.classList.remove('hidden');
     document.getElementById('session-detail')?.classList.add('hidden');
-    triggerSync();
+    // Reveal the header "Setup" button as the route back to these instructions.
+    document.getElementById('btn-setup-show')?.classList.remove('hidden');
+  });
+
+  // Header "⚙ Setup": re-open the Option A instructions without closing the panel.
+  document.getElementById('btn-setup-show')?.addEventListener('click', () => {
+    window.__showSetup?.();
   });
 
   // Click the setting id to copy it
@@ -84,6 +103,9 @@ export function setupEventListeners(opts = {}) {
       document.getElementById('dashboard-view')?.classList.remove('hidden');
       document.getElementById('bc-separator')?.classList.add('hidden');
       document.getElementById('bc-session')?.classList.add('hidden');
+      // Returning to the dashboard in estimated mode — re-show the header
+      // "Setup" button (view navigation alone doesn't recompute it).
+      window.__updateSetupNotice?.();
     };
     bcDashboard.addEventListener('click', goBack);
     bcDashboard.addEventListener('keydown', (e) => {

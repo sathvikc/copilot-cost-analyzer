@@ -595,6 +595,14 @@ select:focus-visible,
   margin-bottom: var(--space-md);
 }
 
+/* The disabled-state icon is the real extension logo (an <img>); the empty
+   state still uses an emoji glyph, so only size the image variant. */
+img.setup-icon {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+}
+
 .setup-title {
   font-size: var(--font-size-xl);
   font-weight: 700;

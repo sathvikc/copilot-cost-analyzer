@@ -36,10 +36,18 @@ function onSelectSession(s, filteredSessions) {
   try {
     if (window.__DEBUG__) console.log('[ui] select session:', s.session_id);
     store.selectedSessionId = s.session_id;
+    // Opening a session means we're past the setup gate — dismiss the Option A
+    // notice and latch the opt-in so it doesn't sit above the detail view (which
+    // forced the user to scroll past an empty panel to reach the session).
+    setEstimatedOptIn(true);
     renderSessionList(filteredSessions, { onSelectSession });
 
+    document.getElementById('setup-notice')?.classList.add('hidden');
     document.getElementById('dashboard-view')?.classList.add('hidden');
     document.getElementById('session-detail')?.classList.remove('hidden');
+    // We just latched the opt-in by opening a session — re-evaluate so the header
+    // "Setup" button appears (it's our only route back to the instructions now).
+    updateSetupNotice();
 
     rpc.call('getSessionDetail', { sessionId: s.session_id }).then(detail => {
       if (window.__DEBUG__) console.log('[ui] detail received:', detail.session?.session_id, 'turns:', detail.turns?.length);
@@ -119,6 +127,9 @@ function setSyncingState(syncing) {
 rpc.on('syncStart', () => setSyncingState(true));
 
 let syncEverCompleted = false;
+// Set once we've read the persisted opt-in from the host, so later notice
+// re-evaluations don't clobber the user's in-session choice.
+let optInHydrated = false;
 rpc.on('syncComplete', () => {
   syncEverCompleted = true;
   setSyncingState(false);
@@ -139,6 +150,29 @@ rpc.on('loading', () => {
 function isSetupNoticeVisible() {
   return !document.getElementById('setup-notice')?.classList.contains('hidden');
 }
+
+// Set the estimated opt-in both in the reactive store and in the extension's
+// globalState, so the choice is remembered the next time the panel opens.
+function setEstimatedOptIn(value) {
+  store.estimatedOptIn = value;
+  rpc.call('setEstimatedOptIn', { value }).catch(() => {});
+}
+
+// Show/hide the header "⚙ Setup" button — the in-app route back to the Option A
+// notice. Only meaningful while we're showing estimated sessions.
+function setSetupButtonVisible(visible) {
+  document.getElementById('btn-setup-show')?.classList.toggle('hidden', !visible);
+}
+
+// "⚙ Setup": return to the setup instructions without closing the panel. Clears
+// the opt-in (so the notice can render and the choice is forgotten until the
+// user opts in again) and re-evaluates which view to show.
+window.__showSetup = () => {
+  setEstimatedOptIn(false);
+  store.selectedSessionId = null;
+  document.getElementById('session-detail')?.classList.add('hidden');
+  updateSetupNotice();
+};
 
 function showSetupNotice(mode, estimatedCount = 0) {
   const notice = document.getElementById('setup-notice');
@@ -161,12 +195,11 @@ function updateEstimatedCta(count) {
   if (!cta) return;
   cta.classList.toggle('hidden', count <= 0);
   if (count <= 0) return;
-  const plural = count === 1 ? '' : 's';
+  const noun = count === 1 ? 'session' : 'sessions';
   const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
   set('setup-estimated-count', String(count));
-  set('setup-estimated-plural', plural);
-  set('btn-view-estimated-count', String(count));
-  set('btn-view-estimated-plural', plural);
+  set('setup-estimated-noun', `past ${noun}`);
+  set('btn-view-estimated-label', `View ${count} estimated ${noun}`);
 }
 
 function hideSetupNotice() {
@@ -201,22 +234,41 @@ async function updateSetupNotice() {
     status = await rpc.call('getSetupStatus');
   } catch {
     hideSetupNotice();
+    setSetupButtonVisible(false);
     return;
+  }
+
+  // Hydrate the persisted opt-in once, so reopening the panel honors the user's
+  // previous "view estimated sessions" choice instead of re-prompting.
+  if (!optInHydrated) {
+    store.estimatedOptIn = !!status.estimatedOptIn;
+    optInHydrated = true;
   }
 
   if (status.debugLoggingEnabled) {
     if (store.sessions.length > 0) hideSetupNotice();
     else if (syncEverCompleted) showSetupNotice('empty');
     else hideSetupNotice();
+    setSetupButtonVisible(false);
     return;
   }
 
-  // Logging is off.
-  if (fullCount > 0 || store.estimatedOptIn) {
+  // Logging is off. Old "full" data is still worth showing as-is (no opt-in / no
+  // Setup button — this isn't the estimated flow).
+  if (fullCount > 0) {
     hideSetupNotice();
+    setSetupButtonVisible(false);
+    return;
+  }
+  // Only estimated sessions exist. Once opted in, show them and offer the header
+  // Setup button as the way back to these instructions.
+  if (store.estimatedOptIn && estimatedCount > 0) {
+    hideSetupNotice();
+    setSetupButtonVisible(true);
     return;
   }
   showSetupNotice('disabled', estimatedCount);
+  setSetupButtonVisible(false);
 }
 
 // --- Data loading ---
@@ -253,6 +305,15 @@ async function loadDashboard() {
     if (window.__DEBUG__) console.error('[ui] getDashboard error:', err);
   }
 }
+
+// Lightweight refresh used by "Re-check" when debug logging is still off:
+// re-read the DB and re-evaluate the setup notice WITHOUT a filesystem sync, so
+// re-checking never silently imports debug-logs the user hasn't opted into.
+window.__refreshSetup = () => { loadSessions(); loadDashboard(); };
+
+// Re-evaluate the setup notice / header "Setup" button after a view change (e.g.
+// breadcrumb back to the dashboard) without a full data reload.
+window.__updateSetupNotice = () => updateSetupNotice();
 
 // --- Init ---
 updateTimeLabel();

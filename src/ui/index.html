@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; style-src {{cspSource}} 'unsafe-inline'; script-src {{cspSource}} 'unsafe-inline'; font-src {{cspSource}};">
+    content="default-src 'none'; img-src {{cspSource}} data:; style-src {{cspSource}} 'unsafe-inline'; script-src {{cspSource}} 'unsafe-inline'; font-src {{cspSource}};">
   <title>Copilot Cost Analyzer</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -18,6 +18,9 @@
       <span class="header-stat" id="dash-total-cost" aria-label="Total estimated cost">— est.</span>
     </div>
     <div class="header-right">
+      <!-- Re-open the Option A setup instructions without closing the panel.
+           Only shown while viewing estimated sessions (debug logging off). -->
+      <button id="btn-setup-show" class="btn btn-secondary hidden" aria-label="Back to setup instructions">⚙ Setup</button>
       <button id="btn-sync" class="btn btn-primary" aria-label="Sync sessions">↻ Sync</button>
     </div>
   </header>
@@ -95,7 +98,7 @@
 
             <!-- State: debug logging disabled -->
             <div id="setup-disabled" class="setup-state">
-              <div class="setup-icon" aria-hidden="true">📊</div>
+              <img class="setup-icon" src="{{iconUri}}" alt="Copilot Cost Analyzer" width="56" height="56" />
               <h2 class="setup-title">Copilot debug logging is off</h2>
               <p class="setup-desc">
                 Copilot Cost Analyzer reads token, cache, and cost data from GitHub Copilot
@@ -124,13 +127,13 @@
                 <p class="setup-estimated-desc">
                   Don't want to enable logging? We found
                   <strong id="setup-estimated-count">0</strong>
-                  past session<span id="setup-estimated-plural">s</span> in Copilot's chat
+                  <span id="setup-estimated-noun">past sessions</span> in Copilot's chat
                   history. We can show those now with <strong>estimated</strong> cost and
                   tokens — cache, retries, and sub-agent detail still need debug logs.
                 </p>
-                <button id="btn-view-estimated" class="btn btn-secondary"
+                <button id="btn-view-estimated" class="btn btn-primary"
                   aria-label="View estimated sessions anyway">
-                  View <span id="btn-view-estimated-count">0</span> session<span id="btn-view-estimated-plural">s</span> anyway (estimated)
+                  <span id="btn-view-estimated-label">View estimated sessions</span>
                 </button>
               </div>
             </div>

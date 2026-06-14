@@ -213,10 +213,20 @@ Sessions are marked with a data quality badge:
 
 | Badge | Meaning |
 |-------|---------|
-| **Full** | Session has `cachedTokens` data (post-2026-06-01 sessions with modern Copilot) |
-| **Limited** | Session is missing `cachedTokens` — cache analysis is unavailable, and cost/token metrics use intelligent approximations. |
+| **Full** | At least one LLM call carries `cachedTokens` data, so cache analysis and exact cost/token metrics are available. |
+| **Limited** | No `cachedTokens` present — cache analysis is unavailable and cost/token metrics use intelligent approximations. |
 
-The cutoff date is configurable via `copilotCostAnalyzer.dataCutoffDate`.
+The badge is derived from the data itself (whether any call reports `cachedTokens`), not from a date.
+
+### Estimated sessions
+
+When Copilot's debug logging is **off**, the extension can still read the always-written
+`chatSessions/*.jsonl` files as a fallback. These sessions are marked **estimated**
+(`source_type = 'chatSessions'`): costs are inferred without token pricing, so they render
+with a `~` prefix and are always **Limited**. They stay hidden behind an opt-in until you
+choose **View N estimated sessions** in the setup notice; the header **⚙ Setup** button takes
+you back to those instructions at any time. Enabling debug logging upgrades future sessions to
+**Full**.
 
 ---
 
@@ -243,7 +253,7 @@ Copilot debug logs  (VS Code workspaceStorage on disk)
                           │
                           ▼
               SQLite — copilot-analytics.db
-                      (sql.js, 11 tables)
+                      (sql.js, 10 tables)
                           │
                           ▼
                    sessionApi.js
@@ -263,10 +273,10 @@ Copilot debug logs  (VS Code workspaceStorage on disk)
 | Language | Node.js / JavaScript (ES2022) |
 | UI | Webview Panel with ES modules |
 | Parser | Node.js `readline` for JSONL streaming |
-| Database | **sql.js** (pure JS SQLite, 11 tables) |
+| Database | **sql.js** (pure JS SQLite, 10 tables) |
 | Charts | Hand-rolled `<canvas>` sparklines |
 | RPC | `postMessage`-based bridge (no HTTP server) |
-| Tests | **Vitest** (129 tests across 10 test files) |
+| Tests | **Vitest** (159 tests across 15 test files) |
 
 ---
 
@@ -293,7 +303,6 @@ You can run both extensions side-by-side for comparison.
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `copilotCostAnalyzer.autoSyncOnStartup` | `true` | Automatically sync debug logs when VS Code starts |
-| `copilotCostAnalyzer.dataCutoffDate` | `"2026-06-01"` | Sessions before this date are marked "Limited Data". ISO 8601 format (`YYYY-MM-DD`) |
 | `copilotCostAnalyzer.debugLogging` | `false` | Enable verbose debug logging in the extension and webview console |
 
 ---
@@ -316,7 +325,7 @@ Scopes: `parser`, `db`, `compute`, `panel`, `webview`, `theme`, `sync`, `cost`
 
 | Command | Purpose |
 |---------|---------|
-| `npm test` | Run unit tests (Vitest, 129 tests) |
+| `npm test` | Run unit tests (Vitest, 159 tests) |
 | `npm run test:watch` | Watch mode for tests |
 | `npm run build` | Lint + test + package `.vsix` |
 | `npm run dev:vscode` | Build and install into VS Code |
@@ -331,8 +340,8 @@ Scopes: `parser`, `db`, `compute`, `panel`, `webview`, `theme`, `sync`, `cost`
 | `src/api/sessionApi.js` | All API functions (session queries) |
 | `src/api/compute/costComputer.js` | Cost computation from model pricing |
 | `src/api/compute/aicClassifier.js` | AI credit classification |
-| `src/db/schema.sql` | Database schema (11 tables) |
-| `src/db/migrations.js` | 16 schema migrations |
+| `src/db/schema.sql` | Database schema (10 tables) |
+| `src/db/migrations.js` | Schema migrations (1: adds `source_type` to sessions) |
 | `src/db/sync.js` | Session discovery + incremental sync |
 | `src/ui/` | Webview UI (ES modules) |
 | `src/shared/rpc.js` | postMessage RPC bridge |

@@ -21,6 +21,10 @@ const PANEL_VIEW_TYPE = 'copilotCostAnalyzer.panel';
 // enable it in one click.
 const COPILOT_DEBUG_SETTING = 'github.copilot.chat.agentDebugLog.fileLogging.enabled';
 
+// globalState key: remembers whether the user opted in to viewing estimated
+// (chatSessions-derived) sessions, so the choice survives closing the panel.
+const ESTIMATED_OPTIN_KEY = 'copilotCostAnalyzer.estimatedOptIn';
+
 let panel = null;
 let rpc = null;
 let db = null;
@@ -183,6 +187,7 @@ async function showPanel(context) {
       retainContextWhenHidden: true,
       localResourceRoots: [
         vscode.Uri.file(path.join(context.extensionPath, 'src', 'ui')),
+        vscode.Uri.file(path.join(context.extensionPath, 'assets', 'icons')),
         vscode.Uri.file(path.join(context.extensionPath, 'node_modules', 'lume-js', 'dist'))
       ]
     }
@@ -274,8 +279,15 @@ async function showPanel(context) {
   });
   rpc.handle('getSetupStatus', () => ({
     debugLoggingEnabled: isCopilotDebugLoggingEnabled(),
-    settingId: COPILOT_DEBUG_SETTING
+    settingId: COPILOT_DEBUG_SETTING,
+    // Persisted Option B opt-in: once the user chooses "view estimated sessions",
+    // remember it so reopening the panel lands on the dashboard, not the notice.
+    estimatedOptIn: context.globalState.get(ESTIMATED_OPTIN_KEY, false)
   }));
+  rpc.handle('setEstimatedOptIn', ({ value }) => {
+    context.globalState.update(ESTIMATED_OPTIN_KEY, !!value);
+    return { ok: true };
+  });
   rpc.handle('openCopilotDebugSetting', async () => {
     try {
       // Passing the setting id opens the Settings UI filtered to exactly that
@@ -375,6 +387,10 @@ function getWebviewContent(webview, context) {
     // Replace app.js entry point with webview URI
     const appUri = webview.asWebviewUri(vscode.Uri.file(path.join(uiPath, 'app.js')));
     html = html.replace('./app.js', appUri.toString());
+    // Use the real extension logo for the setup notice instead of an emoji.
+    // icon.png (not the .svg) is what ships in the vsix — see .vscodeignore.
+    const iconUri = webview.asWebviewUri(vscode.Uri.file(path.join(context.extensionPath, 'assets', 'icons', 'icon.png')));
+    html = html.replace(/\{\{iconUri\}\}/g, iconUri.toString());
     // Apply Content Security Policy using VS Code's webview nonce
     html = html.replace(/\{\{cspSource\}\}/g, webview.cspSource);
     // Inject debug flag and lume.js URI for the ESM entry point
