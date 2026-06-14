@@ -16,61 +16,74 @@ const { createLogger } = require('../utils/logger');
 const log = createLogger('sync');
 
 /**
- * Discover all debug-log session directories across all workspace storages.
+ * Resolve the real on-disk workspace path from a workspace storage dir's
+ * workspace.json (handles file:// URLs and percent-encoded Windows drives).
+ * @param {string} wsDir - <basePath>/<workspaceHash>
+ * @returns {string|null}
+ */
+function resolveWorkspacePath(wsDir) {
+  const wsJsonPath = path.join(wsDir, 'workspace.json');
+  if (!fs.existsSync(wsJsonPath)) return null;
+  try {
+    const wsData = JSON.parse(fs.readFileSync(wsJsonPath, 'utf-8'));
+    const raw = wsData.workspace || wsData.folder || '';
+    if (!raw) return null;
+    try {
+      // Use URL API to correctly decode percent-encoded paths (e.g. c%3A → c: on Windows)
+      const pathname = new URL(raw).pathname;
+      // Strip leading slash before Windows drive letters: /C:/Users → C:/Users
+      return pathname.replace(/^\/([A-Za-z]:)/, '$1') || null;
+    } catch {
+      return raw.replace(/^file:\/\/\//, '/') || null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Discover all Copilot Chat sessions across all workspace storages.
+ *
+ * Two sources, in priority order:
+ *   1. debug-logs/<id>/main.jsonl — full data (tokens, AIC, cache). `source: 'debug-logs'`.
+ *   2. chatSessions/<id>.jsonl    — always-written fallback (estimated; no cache/AIC).
+ *      `source: 'chatSessions'`. Only emitted for sessions NOT already covered by
+ *      debug-logs (full data always wins).
+ *
+ * @param {string[]} [basePaths] - workspace storage roots (defaults to the live
+ *   VS Code locations; injectable for tests).
  * @returns {Array<{
  *   sessionId: string,
  *   workspaceHash: string,
  *   workspacePath: string|null,
- *   debugLogPath: string,
- *   mainJsonlMtime: number
+ *   source: 'debug-logs'|'chatSessions',
+ *   debugLogPath?: string,
+ *   mainJsonlMtime?: number,
+ *   chatSessionPath?: string,
+ *   chatSessionMtime?: number
  * }>}
  */
-function discoverSessions() {
+function discoverSessions(basePaths) {
   // Scan ALL valid VS Code workspace storage paths (Stable + Insiders)
-  const basePaths = getWorkspaceStoragePaths();
+  if (basePaths === undefined) basePaths = getWorkspaceStoragePaths();
 
   if (basePaths.length === 0) {
     return [];
   }
 
   const sessions = [];
+  const debugLogIds = new Set();   // sessions with full data — chatSessions must defer to these
+  const chatSessionIds = new Set(); // guard against the same id in multiple workspaces
 
+  // Pass 1: debug-logs (full data). Collected first so chatSessions can dedupe.
   for (const basePath of basePaths) {
-    const workspaceHashes = fs.readdirSync(basePath, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-      .map(d => d.name);
-
-    for (const wsHash of workspaceHashes) {
-      const debugLogsDir = path.join(basePath, wsHash, 'GitHub.copilot-chat', 'debug-logs');
+    for (const wsHash of listDirs(basePath)) {
+      const wsDir = path.join(basePath, wsHash);
+      const debugLogsDir = path.join(wsDir, 'GitHub.copilot-chat', 'debug-logs');
       if (!fs.existsSync(debugLogsDir)) continue;
 
-      // Read workspace.json to get the actual workspace path
-      let workspacePath = null;
-      const wsJsonPath = path.join(basePath, wsHash, 'workspace.json');
-      if (fs.existsSync(wsJsonPath)) {
-        try {
-          const wsData = JSON.parse(fs.readFileSync(wsJsonPath, 'utf-8'));
-          const raw = wsData.workspace || wsData.folder || '';
-          if (raw) {
-            try {
-              // Use URL API to correctly decode percent-encoded paths (e.g. c%3A → c: on Windows)
-              const pathname = new URL(raw).pathname;
-              // Strip leading slash before Windows drive letters: /C:/Users → C:/Users
-              workspacePath = pathname.replace(/^\/([A-Za-z]:)/, '$1') || null;
-            } catch {
-              workspacePath = raw.replace(/^file:\/\/\//, '/') || null;
-            }
-          }
-        } catch {
-          // ignore parse errors
-        }
-      }
-
-      const sessionDirs = fs.readdirSync(debugLogsDir, { withFileTypes: true })
-        .filter(d => d.isDirectory())
-        .map(d => d.name);
-
-      for (const sessionId of sessionDirs) {
+      const workspacePath = resolveWorkspacePath(wsDir);
+      for (const sessionId of listDirs(debugLogsDir)) {
         const sessionPath = path.join(debugLogsDir, sessionId);
         const mainJsonlPath = path.join(sessionPath, 'main.jsonl');
         if (!fs.existsSync(mainJsonlPath)) continue;
@@ -80,14 +93,59 @@ function discoverSessions() {
           sessionId,
           workspaceHash: wsHash,
           workspacePath,
+          source: 'debug-logs',
           debugLogPath: sessionPath,
           mainJsonlMtime: Math.floor(mtime)
         });
+        debugLogIds.add(sessionId);
+      }
+    }
+  }
+
+  // Pass 2: chatSessions (estimated fallback) for sessions without debug-logs.
+  for (const basePath of basePaths) {
+    for (const wsHash of listDirs(basePath)) {
+      const wsDir = path.join(basePath, wsHash);
+      const chatSessionsDir = path.join(wsDir, 'chatSessions');
+      if (!fs.existsSync(chatSessionsDir)) continue;
+
+      let workspacePath; // resolve lazily — only when this workspace yields a session
+      const files = fs.readdirSync(chatSessionsDir, { withFileTypes: true })
+        .filter(d => d.isFile() && d.name.endsWith('.jsonl'))
+        .map(d => d.name);
+
+      for (const file of files) {
+        const sessionId = file.slice(0, -('.jsonl'.length));
+        if (debugLogIds.has(sessionId) || chatSessionIds.has(sessionId)) continue;
+
+        const chatSessionPath = path.join(chatSessionsDir, file);
+        const mtime = fs.statSync(chatSessionPath).mtimeMs;
+        if (workspacePath === undefined) workspacePath = resolveWorkspacePath(wsDir);
+        sessions.push({
+          sessionId,
+          workspaceHash: wsHash,
+          workspacePath,
+          source: 'chatSessions',
+          chatSessionPath,
+          chatSessionMtime: Math.floor(mtime)
+        });
+        chatSessionIds.add(sessionId);
       }
     }
   }
 
   return sessions;
+}
+
+/** List immediate subdirectory names of a dir (empty array if unreadable). */
+function listDirs(dir) {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => d.name);
+  } catch {
+    return [];
+  }
 }
 
 /**
