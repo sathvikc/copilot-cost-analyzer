@@ -34,6 +34,8 @@ export function renderSessionDetail() {
 
     // Badges
     document.getElementById('badge-quality')?.classList.add('hidden');
+    const isEstimated = session.source_type === 'chatSessions';
+    document.getElementById('badge-estimated')?.classList.toggle('hidden', !isEstimated);
     document.getElementById('badge-subagent')?.classList.toggle('hidden', !session.has_subagent);
     document.getElementById('badge-switch')?.classList.toggle('hidden', !session.has_model_switch);
     const retryCount = store.llmCalls.filter(c => c.debug_name && c.debug_name.includes('retry')).length;
@@ -165,7 +167,11 @@ export function renderSessionModelBreakdown() {
   const sessionSubCounts = session?.subagent_counts_json
     ? (() => { try { return JSON.parse(session.subagent_counts_json); } catch { return {}; } })()
     : {};
-  container.innerHTML = list.map(m => {
+  // Estimated sessions show real token counts but estimated cost/AIC — caption it.
+  const caption = session?.source_type === 'chatSessions'
+    ? '<p class="model-breakdown-caption">~ Cost and AIC are estimated; cache figures need debug logs.</p>'
+    : '';
+  container.innerHTML = caption + list.map(m => {
     m.vendor = m.model.toLowerCase().includes('claude') ? 'Anthropic' : m.model.toLowerCase().includes('gpt') ? 'OpenAI' : '';
     m.aic = m.aic || 0;
     m.cost = m.displayCost || 0;

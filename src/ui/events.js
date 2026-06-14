@@ -39,8 +39,12 @@ export function setupEventListeners(opts = {}) {
 
   // --- Setup notice (Copilot debug logs disabled / no data yet) ---
 
-  // Open the exact Copilot setting in VS Code's Settings UI
-  document.getElementById('btn-open-copilot-setting')?.addEventListener('click', () => {
+  // Open the exact Copilot setting in VS Code's Settings UI.
+  // Delegated so it also serves the Open-Setting buttons inside dynamically
+  // rendered "requires debug logs" notices (cache/retries tabs).
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest?.('#btn-open-copilot-setting, .js-open-copilot-setting');
+    if (!btn) return;
     rpc.call('openCopilotDebugSetting').catch(err => {
       if (window.__DEBUG__) console.error('[ui] openCopilotDebugSetting error:', err);
     });

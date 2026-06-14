@@ -521,7 +521,35 @@ select:focus-visible,
 .badge-error { background: rgba(244, 71, 71, 0.15); color: var(--error); }
 .badge-info { background: rgba(55, 148, 255, 0.15); color: var(--info); }
 .badge-muted { background: rgba(128, 128, 128, 0.15); color: var(--muted); }
+.badge-estimated { background: rgba(232, 168, 56, 0.12); color: var(--warning); border: 1px dashed rgba(232, 168, 56, 0.5); }
 .cache-gap { font-weight: 400; opacity: 0.7; }
+
+/* --- "Requires debug logs" notice (estimated sessions, cache/retry tabs) --- */
+.debug-required-card {
+  display: flex;
+  gap: var(--space-md);
+  align-items: flex-start;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+  margin: var(--space-md) 0;
+}
+.debug-required-icon { font-size: 1.5rem; line-height: 1; }
+.debug-required-body { flex: 1; min-width: 0; }
+.debug-required-title { font-weight: 600; margin: 0 0 var(--space-xs); }
+.debug-required-desc {
+  font-size: var(--font-size-sm);
+  color: var(--muted);
+  margin: 0 0 var(--space-md);
+  line-height: 1.6;
+}
+.model-breakdown-caption {
+  font-size: var(--font-size-sm);
+  color: var(--warning);
+  margin: 0 0 var(--space-md);
+}
 
 /* --- Dashboard Sections --- */
 .dashboard-section {

@@ -8,6 +8,38 @@ import { formatNumber, formatLatency, latencyClass, formatCompact } from '../for
 import { renderTableBody, renderTable } from './table.js';
 
 /**
+ * Whether the currently-open session is an estimated (chatSessions) fallback.
+ * Such sessions have no cache / retry / sub-agent data — only debug logs carry it.
+ * @returns {boolean}
+ */
+export function isEstimatedSession() {
+  return store.sessionDetail?.source_type === 'chatSessions';
+}
+
+/**
+ * Inline "this needs debug logs" notice for features that only exist in debug
+ * logs. Includes the same Open-Setting button as the Option A setup notice
+ * (wired via a delegated `.js-open-copilot-setting` listener in events.js).
+ * @param {string} feature - Human label, e.g. "Cache analysis".
+ * @returns {string} HTML
+ */
+export function debugRequiredNotice(feature) {
+  return `
+    <div class="debug-required-card" role="note">
+      <div class="debug-required-icon" aria-hidden="true">🔍</div>
+      <div class="debug-required-body">
+        <p class="debug-required-title">${escapeHtml(feature)} needs Copilot debug logs</p>
+        <p class="debug-required-desc">
+          This session was reconstructed from Copilot's chat history, which doesn't record
+          ${escapeHtml(feature.toLowerCase())}. Enable debug logging to capture it for new sessions.
+        </p>
+        <button class="btn btn-secondary js-open-copilot-setting"
+          aria-label="Open Copilot debug logging setting">⚙ Open Setting</button>
+      </div>
+    </div>`;
+}
+
+/**
  * Render the session tools tab table.
  */
 export function renderSessionTools() {
@@ -68,6 +100,10 @@ export function renderSessionModelSwitches() {
 export function renderRetryReport() {
   const container = document.getElementById('retry-report');
   if (!container) return;
+  if (isEstimatedSession()) {
+    container.innerHTML = debugRequiredNotice('Retry & failover analysis');
+    return;
+  }
   const calls = store.llmCalls || [];
   const retries = calls.filter(c => c.debug_name && c.debug_name.includes('retry'));
   if (retries.length === 0) {
@@ -117,6 +153,18 @@ export function renderRetryReport() {
  * Render the cache sparkline chart.
  */
 export function renderCacheSparkline() {
+  // Estimated sessions carry no per-call cache data; show the notice instead of
+  // an empty chart + table that would read as "zero cache breaks".
+  const notice = document.getElementById('cache-debug-notice');
+  const content = document.getElementById('cache-content');
+  if (isEstimatedSession()) {
+    if (notice) { notice.innerHTML = debugRequiredNotice('Cache analysis'); notice.classList.remove('hidden'); }
+    content?.classList.add('hidden');
+    return;
+  }
+  if (notice) notice.classList.add('hidden');
+  content?.classList.remove('hidden');
+
   const canvas = document.getElementById('cache-sparkline');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
