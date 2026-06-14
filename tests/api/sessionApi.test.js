@@ -22,6 +22,7 @@ const {
   getAgentResponses,
   getDiscoveryEvents,
   getTranscripts,
+  getConversation,
   exportSession
 } = require('../../src/api/sessionApi');
 
@@ -491,6 +492,64 @@ describe('sessionApi', () => {
       expect(result).toHaveLength(2);
       expect(result[0].event_type).toBe('session.start');
       expect(result[1].event_type).toBe('assistant.message');
+    });
+  });
+
+  // -- getConversation --
+
+  describe('getConversation', () => {
+    it('builds user + assistant turns from transcripts', () => {
+      seedSession(db);
+      seedUserMessage(db, SESSION_ID, 'Fix the bug', { turn_number: 1, timestamp: 100 });
+      seedTranscript(db, SESSION_ID, {
+        event_type: 'assistant.message',
+        event_data: JSON.stringify({ data: { content: 'Sure, fixing it.' } }),
+        timestamp: 200,
+        event_uuid: 'a'
+      });
+
+      const result = getConversation(db, SESSION_ID);
+      expect(result).toHaveLength(2);
+      expect(result[0].role).toBe('user');
+      expect(result[0].content).toBe('Fix the bug');
+      expect(result[1].role).toBe('assistant');
+      expect(result[1].content).toBe('Sure, fixing it.');
+    });
+
+    it('falls back to agent_responses when transcripts have no assistant messages', () => {
+      // Estimated (chatSessions) sessions never produce assistant.message transcripts,
+      // so the conversation must be reconstructed from agent_responses instead.
+      seedSession(db, SESSION_ID, { source_path: '/tmp/chat' });
+      seedUserMessage(db, SESSION_ID, 'What is 2+2?', { turn_number: 1, timestamp: 100 });
+      seedAgentResponse(db, SESSION_ID, {
+        turn_number: 1,
+        timestamp: 200,
+        response_text: JSON.stringify([
+          { role: 'assistant', parts: [{ type: 'text', content: 'It is 4.' }] }
+        ])
+      });
+
+      const result = getConversation(db, SESSION_ID);
+      expect(result).toHaveLength(2);
+      expect(result[0].role).toBe('user');
+      expect(result[1].role).toBe('assistant');
+      expect(result[1].content).toBe('It is 4.');
+    });
+
+    it('prefers transcripts over agent_responses when both exist', () => {
+      seedSession(db);
+      seedUserMessage(db, SESSION_ID, 'Question', { turn_number: 1, timestamp: 100 });
+      seedTranscript(db, SESSION_ID, {
+        event_type: 'assistant.message',
+        event_data: JSON.stringify({ data: { content: 'From transcript' } }),
+        timestamp: 200,
+        event_uuid: 'a'
+      });
+      seedAgentResponse(db, SESSION_ID, { turn_number: 1, timestamp: 200, response_text: 'From agent_responses' });
+
+      const result = getConversation(db, SESSION_ID);
+      const assistant = result.find(m => m.role === 'assistant');
+      expect(assistant.content).toBe('From transcript');
     });
   });
 

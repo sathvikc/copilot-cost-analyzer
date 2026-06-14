@@ -473,6 +473,23 @@ function getConversation(db, sessionId) {
       } catch { return null; }
     }).filter(m => m && m.content);
 
+    // Fallback for estimated (chatSessions) sessions: transcripts has no
+    // assistant.message events for them, so reconstruct assistant turns from
+    // agent_responses (populated by the chatSessions parser) instead.
+    if (asstMsgs.length === 0) {
+      const respRows = db.query(
+        `SELECT response_text, turn_number, timestamp FROM agent_responses
+         WHERE session_id = $sid ORDER BY turn_number, timestamp`,
+        { $sid: sessionId }
+      );
+      for (const r of respRows) {
+        const content = extractTextFromParts(r.response_text);
+        if (content) {
+          asstMsgs.push({ role: 'assistant', content, timestamp: r.timestamp, turnId: null });
+        }
+      }
+    }
+
     // Merge chronologically
     const all = [...userMsgs, ...asstMsgs];
     all.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
