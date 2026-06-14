@@ -10,7 +10,7 @@ const path = require('path');
 const { parseSessionDirectory } = require('../api/parser/mainJsonlParser');
 const { parseChatSessionFile } = require('../api/parser/chatSessionParser');
 const { loadPricing, computeCallCost } = require('../api/compute/costComputer');
-const { computeGlobalAicRatio, computeSessionMetrics } = require('../api/compute/sessionMetrics');
+const { computeGlobalAicRatio, computeSessionMetrics, effectiveAicRatio } = require('../api/compute/sessionMetrics');
 const { getWorkspaceStoragePaths, findWorkspaceFile } = require('../utils/paths');
 const { createLogger } = require('../utils/logger');
 
@@ -852,8 +852,10 @@ async function fullSync(db) {
   let errors = 0;
 
   try {
-    // Pre-compute global AIC ratio from existing data before parsing new sessions
-    const globalAicRatio = computeGlobalAicRatio(db);
+    // Pre-compute global AIC ratio from existing data before parsing new sessions.
+    // effectiveAicRatio falls back to the documented default when there is no AIC
+    // data anywhere (pure-Option-B installs) so estimated costs aren't $0.
+    const globalAicRatio = effectiveAicRatio(computeGlobalAicRatio(db));
 
     for (const sessionInfo of sessions) {
       try {
@@ -874,7 +876,7 @@ async function fullSync(db) {
     // Recompute approx metrics for ALL sessions without their own AIC data.
     // Uses the updated ratio (post-sync) so sessions that were skipped (mtime unchanged)
     // still benefit when new sessions with actual AIC data were parsed above.
-    const updatedRatio = computeGlobalAicRatio(db);
+    const updatedRatio = effectiveAicRatio(computeGlobalAicRatio(db));
     recomputeApproxSessions(db, updatedRatio);
 
     db.persist();

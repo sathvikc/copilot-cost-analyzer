@@ -14,6 +14,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { Database } = require('../../src/db/db');
 const { syncSession } = require('../../src/db/sync');
+const { DEFAULT_AIC_RATIO } = require('../../src/api/compute/sessionMetrics');
 
 /** Write a chatSessions patch-stream JSONL file and return its path. */
 function writeChatSession(dir, name, objs) {
@@ -142,6 +143,34 @@ describe('syncSession — chatSessions fallback', () => {
     expect(row.computed_aic).toBe(3000);
     expect(row.is_aic_approx).toBe(1);
     expect(row.computed_cost).toBeCloseTo(3000 / 1e11, 12);
+  });
+
+  it('estimates with the default ratio when no global ratio is known (pure Option B)', async () => {
+    const chatPath = writeChatSession(tmpDir, 'chat-only-001.jsonl', [
+      {
+        kind: 0,
+        v: {
+          requests: [{
+            requestId: 'r0', timestamp: 1780892700230, modelId: 'copilot/gpt-5-mini',
+            message: { text: 'hi' }, response: [],
+          }],
+        },
+      },
+      { kind: 1, k: ['requests', 0, 'result'], v: { metadata: { promptTokens: 1000 } } },
+      { kind: 1, k: ['requests', 0, 'completionTokens'], v: '500' },
+    ]);
+
+    // globalAicRatio = 0 → syncChatSession must still produce a non-zero estimate
+    // via the documented DEFAULT_AIC_RATIO so pure-Option-B sessions aren't $0.
+    await syncSession(db, buildSessionInfo(chatPath), 0);
+
+    const row = db.queryOne(
+      'SELECT computed_aic, computed_cost, is_aic_approx FROM sessions WHERE session_id = $sid',
+      { $sid: 'chat-only-001' }
+    );
+    expect(row.computed_aic).toBe(1500 * DEFAULT_AIC_RATIO);
+    expect(row.is_aic_approx).toBe(1);
+    expect(row.computed_cost).toBeGreaterThan(0);
   });
 
   it('skips re-sync when the chatSessions file is unchanged', async () => {
