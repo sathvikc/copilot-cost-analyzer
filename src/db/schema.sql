@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   has_model_switch INTEGER DEFAULT 0,
   has_subagent INTEGER DEFAULT 0,
   source_path TEXT,
+  source_type TEXT DEFAULT 'debug-logs', -- 'debug-logs' | 'chatSessions' (estimated fallback)
   first_prompt TEXT,
   copilot_version TEXT,
   vscode_version TEXT,

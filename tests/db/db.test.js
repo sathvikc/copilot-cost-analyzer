@@ -11,6 +11,7 @@ import os from 'os';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { Database } = require('../../src/db/db');
+const { MIGRATIONS } = require('../../src/db/migrations');
 
 describe('Database', () => {
   let db;
@@ -39,8 +40,17 @@ describe('Database', () => {
       expect(db.tableExists('schema_version')).toBe(true);
     });
 
-    it('has no pending migrations on fresh install (schema.sql is the complete baseline)', () => {
-      expect(db.schemaVersion).toBe(0);
+    it('advances schema_version to the latest migration on fresh install', () => {
+      const latest = MIGRATIONS.reduce((max, m) => Math.max(max, m.version), 0);
+      expect(db.schemaVersion).toBe(latest);
+    });
+
+    it('has source_type column on sessions (debug-logs default)', () => {
+      const cols = db.query('PRAGMA table_info(sessions)').map((r) => r.name);
+      expect(cols).toContain('source_type');
+      db.run("INSERT INTO sessions (session_id, workspace_hash) VALUES ('st-1', 'h1')");
+      const row = db.queryOne("SELECT source_type FROM sessions WHERE session_id = 'st-1'");
+      expect(row.source_type).toBe('debug-logs');
     });
 
     it('persists to disk', () => {
