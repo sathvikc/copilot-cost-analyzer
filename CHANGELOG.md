@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 with the following constraint: **all versions are 0.x.x** (pre-1.0) while the
 extension is in active development.
 
+## [Unreleased]
+
+### Added
+- **See your sessions even with debug logging off** — previously, if Copilot's agent debug file logging wasn't enabled, the dashboard was blank. The extension now falls back to Copilot's always-on chat history and shows those sessions with an estimated cost, badged `~ est`.
+- **Estimated sessions upgrade automatically** — once you enable debug logging, any session that gains full logs is upgraded in place with its exact cost, cache, retry, and sub-agent details. The same session is never duplicated.
+- **Clear labeling for estimated data** — estimated sessions are badged throughout, their model breakdown notes that cost and AIC are estimated, and the Cache and Retries views show a "requires debug logs" notice instead of an empty panel.
+
 ## [0.7.0] - 2026-06-12
 
 ### Added
