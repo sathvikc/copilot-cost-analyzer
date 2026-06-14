@@ -445,13 +445,13 @@ function getConversation(db, sessionId) {
     // User messages: always from user_messages table (reliable source from main.jsonl).
     // Transcripts often lack user.message events entirely.
     const userRows = db.query(
-      `SELECT content, timestamp FROM user_messages
+      `SELECT content, timestamp, turn_number FROM user_messages
        WHERE session_id = $sid AND content IS NOT NULL AND content != ''
-       ORDER BY timestamp`,
+       ORDER BY timestamp, turn_number`,
       { $sid: sessionId }
     );
     const userMsgs = userRows.map(r => ({
-      role: 'user', content: r.content, timestamp: r.timestamp, turnId: null
+      role: 'user', content: r.content, timestamp: r.timestamp, turnId: null, turnNumber: r.turn_number
     }));
 
     // Assistant messages: from transcripts (only source for assistant text).
@@ -474,19 +474,39 @@ function getConversation(db, sessionId) {
     }).filter(m => m && m.content);
 
     // Fallback for estimated (chatSessions) sessions: transcripts has no
-    // assistant.message events for them, so reconstruct assistant turns from
-    // agent_responses (populated by the chatSessions parser) instead.
+    // assistant.message events for them, so reconstruct the conversation from
+    // agent_responses (populated by the chatSessions parser) instead. The user
+    // message and its response share the same request timestamp, so align them
+    // by turn_number rather than relying on the chronological merge below.
     if (asstMsgs.length === 0) {
       const respRows = db.query(
-        `SELECT response_text, turn_number, timestamp FROM agent_responses
+        `SELECT response_text, turn_number FROM agent_responses
          WHERE session_id = $sid ORDER BY turn_number, timestamp`,
         { $sid: sessionId }
       );
-      for (const r of respRows) {
-        const content = extractTextFromParts(r.response_text);
-        if (content) {
-          asstMsgs.push({ role: 'assistant', content, timestamp: r.timestamp, turnId: null });
+      if (respRows.length) {
+        const respByTurn = new Map();
+        for (const r of respRows) {
+          const content = extractTextFromParts(r.response_text);
+          if (!content) continue;
+          const list = respByTurn.get(r.turn_number) || [];
+          list.push(content);
+          respByTurn.set(r.turn_number, list);
         }
+        const out = [];
+        for (const u of userMsgs) {
+          out.push({ role: 'user', content: u.content, timestamp: u.timestamp, turnId: null });
+          const resps = respByTurn.get(u.turnNumber);
+          if (resps) {
+            out.push({ role: 'assistant', content: resps.join('\n\n'), timestamp: u.timestamp, turnId: null });
+            respByTurn.delete(u.turnNumber);
+          }
+        }
+        // Any responses whose turn had no user message (defensive) trail at the end.
+        for (const resps of respByTurn.values()) {
+          out.push({ role: 'assistant', content: resps.join('\n\n'), timestamp: null, turnId: null });
+        }
+        return out;
       }
     }
 
