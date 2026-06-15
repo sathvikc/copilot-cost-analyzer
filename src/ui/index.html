@@ -247,8 +247,6 @@
               <h2 id="detail-title" class="detail-title"></h2>
               <div class="detail-badges">
                 <span id="badge-quality" class="badge badge-success hidden" role="status">✓ Good</span>
-                <span id="badge-estimated" class="badge badge-estimated hidden" role="status"
-                  title="Reconstructed from Copilot's chat history — cost and tokens are estimated. Enable debug logging for exact figures.">~ Estimated</span>
                 <span id="badge-subagent" class="badge badge-info hidden" role="status">ℹ Sub-agent</span>
                 <span id="badge-switch" class="badge badge-warning hidden" role="status">⇄ Model Switch</span>
                 <span id="badge-retry" class="badge badge-warning hidden" role="status">↻ retries</span>
@@ -304,6 +302,14 @@
               <div class="card-value" id="card-aic" data-bind="cardAic">—</div>
             </div>
           </div>
+
+          <p id="limited-data-note" class="note hidden">
+            ℹ Limited data — this session was captured from Copilot's chat history, not debug logs.
+            The conversation and an estimated <strong>output</strong> token count are shown, but
+            <strong>input, cache, cost and AI Credits</strong> aren't recorded here and show “—”.
+            They need Copilot's debug logging, which only captures sessions going forward —
+            it can't be applied to past chats. This session is excluded from Dashboard totals.
+          </p>
 
           <p id="aic-discrepancy-note" class="note hidden">
             ⚠ This session has retry calls — AIC may include retries not shown in the Copilot dashboard.

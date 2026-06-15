@@ -103,6 +103,19 @@ function buildTurns(llmCalls, toolCalls, userMessages, session) {
     byTurn.get(tn).userMessages.push(msg);
   }
 
+  // --- Limited-source (chatSessions) per-call flags ---
+  // chatSessions calls have no recoverable input/cache/cost/AIC. Output is either
+  // a real count (rare) or estimated from the response text (input === 0 but
+  // output > 0). Flag both so the UI renders "—" for missing fields and "~" for
+  // the estimated output instead of a misleading "0".
+  const isChatSession = session && session.source_type === 'chatSessions';
+  if (isChatSession) {
+    for (const call of llmCalls) {
+      call.is_limited_source = true;
+      call.output_estimated = (call.input_tokens || 0) === 0 && (call.output_tokens || 0) > 0;
+    }
+  }
+
   // --- Estimated AIC distribution ---
   // When session has no actual AIC data, distribute the session-level estimated AIC
   // proportionally across calls based on (input_tokens + output_tokens).
@@ -149,7 +162,14 @@ function buildTurns(llmCalls, toolCalls, userMessages, session) {
     // Build unified chronological events within this turn
     const events = [];
     for (const msg of data.userMessages) {
-      events.push({ type: 'userMessage', content: msg.content || '', ts: msg.timestamp || null, _order: 0 });
+      // Floor to whole seconds. For chatSessions the user message, its LLM call,
+      // and the agent response all derive from the same request instant, but the
+      // call/response are stored floored while the message keeps sub-second
+      // precision — so an un-floored message sorts microscopically AFTER the
+      // agent response. Flooring makes them tie, and the _order tiebreaker below
+      // then keeps the natural user -> tool -> llm order.
+      const ts = msg.timestamp != null ? Math.floor(msg.timestamp) : null;
+      events.push({ type: 'userMessage', content: msg.content || '', ts, _order: 0 });
     }
     for (const tool of data.toolCalls) {
       events.push({
@@ -173,7 +193,10 @@ function buildTurns(llmCalls, toolCalls, userMessages, session) {
       });
     }
     events.sort((a, b) => {
-      if (a.ts !== null && b.ts !== null) return a.ts - b.ts;
+      if (a.ts !== null && b.ts !== null) {
+        if (a.ts !== b.ts) return a.ts - b.ts;
+        return a._order - b._order; // same instant -> user -> tool -> llm
+      }
       if (a.ts === null && b.ts !== null) return 1;
       if (a.ts !== null && b.ts === null) return -1;
       return a._order - b._order;
@@ -228,6 +251,8 @@ function getSessions(db) {
  */
 function getDashboard(db) {
   try {
+  // chatSessions are a limited fallback with no recoverable input/cost/AIC, so
+  // they're excluded from all Dashboard totals (cost, AIC, models, tools).
   const dailyCost = db.query(`
     SELECT
       date(start_time, 'unixepoch') as day,
@@ -237,6 +262,7 @@ function getDashboard(db) {
       SUM(computed_aic) as aic
     FROM sessions
     WHERE start_time IS NOT NULL
+      AND source_type IS NOT 'chatSessions'
     GROUP BY day
     ORDER BY day DESC
     LIMIT 30
@@ -245,6 +271,7 @@ function getDashboard(db) {
   const toolsBySession = db.query(`
     SELECT session_id, tool_name, COUNT(*) as calls, SUM(result_size) as total_size
     FROM tool_calls
+    WHERE session_id IN (SELECT session_id FROM sessions WHERE source_type IS NOT 'chatSessions')
     GROUP BY session_id, tool_name
     ORDER BY session_id, calls DESC
   `);
@@ -259,6 +286,7 @@ function getDashboard(db) {
       SUM(output_tokens) as output_tokens,
       SUM(cached_tokens) as cached_tokens
     FROM llm_calls
+    WHERE session_id IN (SELECT session_id FROM sessions WHERE source_type IS NOT 'chatSessions')
     GROUP BY session_id, model
     ORDER BY session_id, aic DESC
   `);

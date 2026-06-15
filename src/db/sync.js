@@ -234,7 +234,14 @@ function parseChatSession(sessionId, workspaceHash) {
  * @returns {Promise<boolean>} true if synced, false if skipped (up to date)
  */
 const PARSER_VERSION = 30; // bump when debug-logs parser logic changes to force re-sync
-const CHAT_PARSER_VERSION = 1; // bump when chatSessions parser logic changes to force re-sync
+const CHAT_PARSER_VERSION = 2; // bump when chatSessions parser logic changes to force re-sync
+
+// chatSessions records the assistant's response text but, for sessions captured
+// while Copilot debug-logging was off, no token counts. We can still *count*
+// output because we have the text — estimate it at ~4 chars/token. Input, cache,
+// cost and AIC are NOT recoverable from chatSessions and are left empty (shown as
+// "—"), never fabricated.
+const CHARS_PER_TOKEN = 4;
 
 async function syncSession(db, sessionInfo, globalAicRatio) {
   if (globalAicRatio === undefined) globalAicRatio = 0;
@@ -396,18 +403,21 @@ async function syncDebugLogSession(db, sessionInfo, globalAicRatio) {
 }
 
 /**
- * Sync a single chatSessions-only session (estimated fallback). Copilot always
+ * Sync a single chatSessions-only session (limited fallback). Copilot always
  * writes chatSessions/<id>.jsonl regardless of the agentDebugLog setting, so this
  * surfaces sessions that have no debug-logs. There is no cache split, no AIC and
- * no token pricing — cost/AIC are estimated downstream from the global ratio and
- * the row is flagged `source_type='chatSessions'`, `data_quality='limited'`.
+ * no token pricing. We show the conversation and *count output tokens* (estimated
+ * from the response text), but input/cache/cost/AIC are left empty — they need
+ * debug logs which can't be enabled retroactively, so a number would be fabricated.
+ * The row is flagged `source_type='chatSessions'`, `data_quality='limited'` and is
+ * excluded from Dashboard totals.
  *
  * @param {Object} db - Database instance
  * @param {Object} sessionInfo - From discoverSessions() with source 'chatSessions'
- * @param {number} globalAicRatio - Pre-computed AIC-per-token ratio for estimating AIC
+ * @param {number} [globalAicRatio] - Unused; kept for a uniform syncSession dispatch signature
  * @returns {Promise<boolean>} true if synced, false if skipped (up to date)
  */
-async function syncChatSession(db, sessionInfo, globalAicRatio) {
+async function syncChatSession(db, sessionInfo, globalAicRatio) { // eslint-disable-line no-unused-vars
   const { sessionId, workspaceHash, workspacePath, chatSessionPath, chatSessionMtime } = sessionInfo;
 
   const currentFileSize = fs.existsSync(chatSessionPath) ? fs.statSync(chatSessionPath).size : 0;
@@ -429,18 +439,25 @@ async function syncChatSession(db, sessionInfo, globalAicRatio) {
     return false; // nothing ran in this session yet
   }
 
+  // Estimate output tokens from the response text for calls that completed but
+  // recorded no token counts (input === 0 && output === 0). Calls that *do* carry
+  // real counts are left untouched. A genuinely-failed turn (no response text)
+  // stays at 0 → it surfaces as "—" downstream, not a fabricated number.
+  const charsByTurn = new Map();
+  for (const r of (parsed.agentResponses || [])) {
+    const chars = (r.responseText || '').length + (r.reasoningText || '').length;
+    charsByTurn.set(r.turnNumber, (charsByTurn.get(r.turnNumber) || 0) + chars);
+  }
+  for (const call of parsed.llmCalls) {
+    if (call.inputTokens === 0 && call.outputTokens === 0) {
+      const chars = charsByTurn.get(call.turnNumber) || 0;
+      if (chars > 0) call.outputTokens = Math.ceil(chars / CHARS_PER_TOKEN);
+    }
+  }
+
   const modelsUsed = new Set(parsed.llmCalls.map(c => c.model));
   const totalInputTokens = parsed.llmCalls.reduce((s, c) => s + c.inputTokens, 0);
   const totalOutputTokens = parsed.llmCalls.reduce((s, c) => s + c.outputTokens, 0);
-
-  // No AIC and no cache data → cost is purely estimated from the global ratio.
-  const rawSession = {
-    total_aic: null,
-    total_input_tokens: totalInputTokens,
-    total_output_tokens: totalOutputTokens,
-    total_cached_tokens: null
-  };
-  const metrics = computeSessionMetrics(rawSession, globalAicRatio, 0);
 
   db.transaction(() => {
     deleteSessionRows(db, sessionId);
@@ -459,11 +476,13 @@ async function syncChatSession(db, sessionInfo, globalAicRatio) {
       $cached: null,       // no cache split in chatSessions
       $cacheWrite: null,
       $cost: 0,            // no token pricing alongside chatSessions
-      $aic: null,          // estimated downstream
-      $compAic: Math.round(metrics.computedAic),
-      $compCost: metrics.computedCost,
-      $isApprox: metrics.isAicApprox ? 1 : 0,
-      $cacheHit: metrics.cacheHitPct,
+      $aic: null,          // not present in chatSessions
+      // Cost/AIC are NOT estimated: input (the dominant token cost) needs debug
+      // logs that can't be enabled retroactively, so any number would be made up.
+      $compAic: 0,
+      $compCost: 0,
+      $isApprox: 0,
+      $cacheHit: 0,
       $subagentCounts: null,
       $quality: 'limited',
       $hasSwitch: parsed.modelSwitches.length > 0 ? 1 : 0,
@@ -832,6 +851,9 @@ function recomputeApproxSessions(db, globalAicRatio) {
         ELSE 0
         END
     WHERE (total_aic IS NULL OR total_aic = 0)
+      -- chatSessions deliberately have no cost/AIC (input isn't recoverable);
+      -- exclude them so this pass doesn't re-fabricate it from the global ratio.
+      AND source_type IS NOT 'chatSessions'
   `, { $ratio: globalAicRatio });
 }
 

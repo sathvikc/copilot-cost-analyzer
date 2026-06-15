@@ -1,9 +1,11 @@
 /**
  * @fileoverview Tests for syncSession's chatSessions fallback branch (T4).
  *
- * A chatSessions-only session must land in the DB as an estimated row:
+ * A chatSessions-only session lands in the DB as a limited row:
  *   source_type='chatSessions', data_quality='limited', total_aic=NULL,
  *   total_cost=0, with populated llm_calls / user_messages / agent_responses.
+ * Input/cache/cost/AIC are NOT fabricated (they need debug logs); output is
+ * counted from real token counts when present, else estimated from the text.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -14,7 +16,6 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { Database } = require('../../src/db/db');
 const { syncSession } = require('../../src/db/sync');
-const { DEFAULT_AIC_RATIO } = require('../../src/api/compute/sessionMetrics');
 
 /** Write a chatSessions patch-stream JSONL file and return its path. */
 function writeChatSession(dir, name, objs) {
@@ -117,7 +118,7 @@ describe('syncSession — chatSessions fallback', () => {
     expect(resp.response_text).toBe('Here is the answer.');
   });
 
-  it('estimates AIC and cost when a global ratio is available', async () => {
+  it('never fabricates AIC or cost — even when a global ratio is available', async () => {
     const chatPath = writeChatSession(tmpDir, 'chat-only-001.jsonl', [
       {
         kind: 0,
@@ -132,20 +133,24 @@ describe('syncSession — chatSessions fallback', () => {
       { kind: 1, k: ['requests', 0, 'completionTokens'], v: '500' },
     ]);
 
-    // ratio = 2 AIC/token → computedAic = (1000 + 500) * 2 = 3000
-    const ratio = 2;
-    await syncSession(db, buildSessionInfo(chatPath), ratio);
+    // A ratio is available, but input (the dominant cost) is unrecoverable from
+    // chatSessions and debug logs can't be enabled retroactively — so cost/AIC
+    // are left at 0 (rendered "—"), never estimated from the ratio.
+    await syncSession(db, buildSessionInfo(chatPath), 2);
 
     const row = db.queryOne(
       'SELECT computed_aic, computed_cost, is_aic_approx FROM sessions WHERE session_id = $sid',
       { $sid: 'chat-only-001' }
     );
-    expect(row.computed_aic).toBe(3000);
-    expect(row.is_aic_approx).toBe(1);
-    expect(row.computed_cost).toBeCloseTo(3000 / 1e11, 12);
+    expect(row.computed_aic).toBe(0);
+    expect(row.is_aic_approx).toBe(0);
+    expect(row.computed_cost).toBe(0);
   });
 
-  it('estimates with the default ratio when no global ratio is known (pure Option B)', async () => {
+  it('estimates output tokens from the response text when no counts were recorded', async () => {
+    // A completed turn that recorded the assistant text but NO token counts —
+    // typical of sessions captured while Copilot debug-logging was off.
+    const responseText = 'x'.repeat(400); // 400 chars → ceil(400 / 4) = 100 tokens
     const chatPath = writeChatSession(tmpDir, 'chat-only-001.jsonl', [
       {
         kind: 0,
@@ -156,21 +161,54 @@ describe('syncSession — chatSessions fallback', () => {
           }],
         },
       },
-      { kind: 1, k: ['requests', 0, 'result'], v: { metadata: { promptTokens: 1000 } } },
-      { kind: 1, k: ['requests', 0, 'completionTokens'], v: '500' },
+      { kind: 2, k: ['requests', 0, 'response'], v: { 0: { value: responseText } } },
     ]);
 
-    // globalAicRatio = 0 → syncChatSession must still produce a non-zero estimate
-    // via the documented DEFAULT_AIC_RATIO so pure-Option-B sessions aren't $0.
     await syncSession(db, buildSessionInfo(chatPath), 0);
 
     const row = db.queryOne(
-      'SELECT computed_aic, computed_cost, is_aic_approx FROM sessions WHERE session_id = $sid',
+      `SELECT total_input_tokens, total_output_tokens, computed_aic, is_aic_approx
+         FROM sessions WHERE session_id = $sid`,
       { $sid: 'chat-only-001' }
     );
-    expect(row.computed_aic).toBe(1500 * DEFAULT_AIC_RATIO);
-    expect(row.is_aic_approx).toBe(1);
-    expect(row.computed_cost).toBeGreaterThan(0);
+    expect(row.total_input_tokens).toBe(0);     // no system-prompt data → "—" in the UI
+    expect(row.total_output_tokens).toBe(100);  // estimated from the response text
+    expect(row.computed_aic).toBe(0);           // still never fabricated
+    expect(row.is_aic_approx).toBe(0);
+
+    const call = db.queryOne(
+      'SELECT input_tokens, output_tokens FROM llm_calls WHERE session_id = $sid',
+      { $sid: 'chat-only-001' }
+    );
+    expect(call.input_tokens).toBe(0);
+    expect(call.output_tokens).toBe(100);
+  });
+
+  it('does not overwrite a real output count with an estimate', async () => {
+    // When the turn carries a real completionTokens count, the response text is
+    // ignored for estimation — the recorded number wins.
+    const chatPath = writeChatSession(tmpDir, 'chat-only-001.jsonl', [
+      {
+        kind: 0,
+        v: {
+          requests: [{
+            requestId: 'r0', timestamp: 1780892700230, modelId: 'copilot/gpt-5-mini',
+            message: { text: 'hi' }, response: [],
+          }],
+        },
+      },
+      { kind: 1, k: ['requests', 0, 'result'], v: { metadata: { promptTokens: 1000 } } },
+      { kind: 1, k: ['requests', 0, 'completionTokens'], v: '500' },
+      { kind: 2, k: ['requests', 0, 'response'], v: { 0: { value: 'x'.repeat(4000) } } },
+    ]);
+
+    await syncSession(db, buildSessionInfo(chatPath), 0);
+    const row = db.queryOne(
+      'SELECT total_input_tokens, total_output_tokens FROM sessions WHERE session_id = $sid',
+      { $sid: 'chat-only-001' }
+    );
+    expect(row.total_input_tokens).toBe(1000);
+    expect(row.total_output_tokens).toBe(500); // real count, not the 1000-token text estimate
   });
 
   it('skips re-sync when the chatSessions file is unchanged', async () => {

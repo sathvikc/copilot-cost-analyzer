@@ -324,6 +324,21 @@ describe('sessionApi', () => {
       const result = getSessionDetail(db, SESSION_ID);
       expect(result.turns[0].isCanceled).toBe(true);
     });
+
+    it('orders the user message before the agent response within a turn (chatSessions)', () => {
+      // Regression: chatSessions stores the LLM call floored to the whole second
+      // but the user message with sub-second precision — both from the same
+      // request instant. The message must still sort FIRST, not after the agent.
+      seedSession(db);
+      seedUserMessage(db, SESSION_ID, 'how should i create a prompt', {
+        turn_number: 1, timestamp: 1773708364.74
+      });
+      seedLlmCall(db, SESSION_ID, 1, { turn_number: 1, timestamp: 1773708364, aic: 1e9 });
+
+      const events = getSessionDetail(db, SESSION_ID).turns[0].events;
+      expect(events[0].type).toBe('userMessage');
+      expect(events[1].type).toBe('llmCall');
+    });
   });
 
   // -- getDashboard --

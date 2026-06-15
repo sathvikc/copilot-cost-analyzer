@@ -44,8 +44,9 @@ export function renderSessionList(filteredSessions, opts = {}) {
     const wsName = s.workspace_path ? (s.workspace_path.split('/').pop() || s.workspace_path) : 'unknown';
 
     // Status badge based on session attributes
+    // (Estimated `~ est` badge intentionally omitted here \u2014 the detail header
+    // already labels an open estimated session; the sidebar pill was noise.)
     const badges = [];
-    if (s.source_type === 'chatSessions') badges.push('<span class="badge badge-estimated" role="status" aria-label="Estimated session" title="Reconstructed from chat history \u2014 estimated cost">~ est</span>');
     if (s.retry_count > 0) badges.push('<span class="badge badge-warning" role="status" aria-label="' + s.retry_count + ' retries" title="' + s.retry_count + ' retries">\u21BB ' + s.retry_count + '</span>');
     if (s.has_model_switch) badges.push('<span class="badge badge-warning" role="status" aria-label="Model switch" title="Model switch">\u21C4</span>');
     if (s.has_subagent) badges.push('<span class="badge badge-info" role="status" aria-label="Sub-agent" title="Sub-agent">\u2139 sub</span>');

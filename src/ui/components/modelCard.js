@@ -26,10 +26,13 @@ function renderRow(label, value, opts = {}) {
  * @param {boolean} [opts.showAic=true]
  * @param {boolean} [opts.showCacheWrite=true]
  * @param {boolean} [opts.applyAicColor=true]
+ * @param {boolean} [opts.limited=false] - Limited-source (chatSessions): no recoverable input/cache; show "\u2014".
+ * @param {boolean} [opts.outputEstimated=false] - Output was estimated from response text; prefix "~".
  * @returns {string}
  */
 export function renderModelCard(m, opts = {}) {
   const showCacheWrite = opts.showCacheWrite !== false;
+  const limited = opts.limited === true;
   const subagentCounts = opts.subagentCounts || {};
   const subCount = subagentCounts[m.model] || 0;
   const subBadge = subCount > 0
@@ -46,18 +49,32 @@ export function renderModelCard(m, opts = {}) {
   const freshInput = m.input_tokens > 0 && m.cached_tokens != null
     ? Math.max(0, m.input_tokens - m.cached_tokens) : (m.input_tokens || 0);
 
+  // For limited-source models, input/cache aren't recoverable \u2014 show "\u2014" (not "0")
+  // unless a real count happens to be present. Output is shown with "~" when estimated.
+  const inputCell = (limited && !m.input_tokens) ? '\u2014' : formatCompact(m.input_tokens || 0);
+  const cachedCell = (limited && !m.cached_tokens) ? '\u2014' : formatCompact(m.cached_tokens || 0);
+  const freshCell = (limited && !freshInput) ? '\u2014' : formatCompact(freshInput);
+  const outputCell = (opts.outputEstimated ? '~' : '') +
+    ((limited && !m.output_tokens) ? '\u2014' : formatCompact(m.output_tokens || 0));
+
   const rows = [
-    renderRow('Total input', formatCompact(m.input_tokens || 0)),
-    renderRow('Cached input', formatCompact(m.cached_tokens || 0), { valueClass: 'model-card-value value-success' }),
-    renderRow('Fresh input', formatCompact(freshInput))
+    renderRow('Total input', inputCell),
+    renderRow('Cached input', cachedCell, { valueClass: 'model-card-value value-success' }),
+    renderRow('Fresh input', freshCell)
   ];
   if (showCacheWrite) {
     const cw = m.cache_write_tokens;
     rows.push(renderRow('Cache write', cw == null ? '\u2014' : formatCompact(cw)));
   }
-  rows.push(renderRow('Output', formatCompact(m.output_tokens || 0)));
+  rows.push(renderRow('Output', outputCell));
 
   const cacheClass = cacheHitPct >= 80 ? 'cache-good' : cacheHitPct >= 50 ? 'cache-mid' : 'cache-bad';
+  // No cache split exists for limited-source sessions \u2014 hide the cache-hit bar.
+  const cacheBar = limited ? '' : `
+      <div class="cache-bar-track" role="progressbar" aria-valuenow="${cacheHitPct}" aria-valuemin="0" aria-valuemax="100" aria-label="Cache hit rate ${cacheHitPct}%">
+        <div class="cache-bar-fill" style="width:${cacheHitPct}%"></div>
+      </div>
+      <div class="cache-bar-label ${cacheClass}">Cache hit rate ${cacheHitPct}%</div>`;
 
   return `
     <div class="model-card" role="article" aria-label="${escapeHtml(m.model)} model breakdown">
@@ -74,10 +91,6 @@ export function renderModelCard(m, opts = {}) {
           ${costDisplay ? `<div class="model-card-cost-sub">${costDisplay}</div>` : ''}
         </div>
       </div>
-      ${rows.join('')}
-      <div class="cache-bar-track" role="progressbar" aria-valuenow="${cacheHitPct}" aria-valuemin="0" aria-valuemax="100" aria-label="Cache hit rate ${cacheHitPct}%">
-        <div class="cache-bar-fill" style="width:${cacheHitPct}%"></div>
-      </div>
-      <div class="cache-bar-label ${cacheClass}">Cache hit rate ${cacheHitPct}%</div>
+      ${rows.join('')}${cacheBar}
     </div>`;
 }

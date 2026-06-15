@@ -4,10 +4,11 @@
  * Exercises the whole pipeline through the public API layer — not hand-seeded
  * rows — to prove the two governing behaviours hold together:
  *
- *   1. A workspace with only chatSessions (debug logging OFF) still yields a
- *      populated dashboard: getSessions / getDashboard report an estimated row
- *      with non-zero cost, and getConversation reconstructs the user<->assistant
+ *   1. A workspace with only chatSessions (debug logging OFF) still surfaces the
+ *      session and its conversation: getSessions lists a limited row (no
+ *      fabricated cost/AIC) and getConversation reconstructs the user<->assistant
  *      exchange from agent_responses (transcripts are empty for these sessions).
+ *      The session is excluded from Dashboard totals (no recoverable cost/AIC).
  *   2. When debug logs later appear for the same session, a re-sync upgrades the
  *      row in place to full data, and the dashboard reflects real AIC/cache with
  *      no duplicate rows.
@@ -112,31 +113,28 @@ describe('Option B end-to-end: chatSessions fallback + migration', () => {
     };
   }
 
-  it('chatSessions-only workspace yields a populated, estimated dashboard', async () => {
+  it('chatSessions-only workspace surfaces the session but is excluded from Dashboard totals', async () => {
     expect(await syncSession(db, csInfo(), 0)).toBe(true);
 
-    // getSessions: one estimated row with a non-zero estimated cost.
+    // getSessions: one limited row with NO fabricated cost/AIC.
     const sessions = getSessions(db);
     expect(sessions).toHaveLength(1);
     const s = sessions[0];
     expect(s.session_id).toBe(SESSION_ID);
     expect(s.source_type).toBe('chatSessions');
     expect(s.data_quality).toBe('limited');
-    expect(s.is_aic_approx).toBe(1);
-    expect(s.computed_cost).toBeGreaterThan(0);
+    expect(s.is_aic_approx).toBe(0);
+    expect(s.computed_cost).toBe(0);
+    expect(s.computed_aic).toBe(0);
     expect(s.total_input_tokens).toBe(10000);
     expect(s.total_output_tokens).toBe(500);
     // No real cache figures from chatSessions.
     expect(s.total_cached_tokens).toBeNull();
 
-    // getDashboard: the estimated cost rolls up into the daily totals + models.
+    // getDashboard: chatSessions are excluded — no cost/AIC/model rollup.
     const dash = getDashboard(db);
-    expect(dash.dailyCost).toHaveLength(1);
-    expect(dash.dailyCost[0].sessions).toBe(1);
-    expect(dash.dailyCost[0].cost).toBeGreaterThan(0);
-    const model = dash.modelsBySession.find(m => m.model === 'gpt-5-mini');
-    expect(model).toBeDefined();
-    expect(model.vendor).toBe('OpenAI');
+    expect(dash.dailyCost).toHaveLength(0);
+    expect(dash.modelsBySession.find(m => m.model === 'gpt-5-mini')).toBeUndefined();
 
     // getConversation: reconstructed from agent_responses (no transcripts exist).
     const convo = getConversation(db, SESSION_ID);

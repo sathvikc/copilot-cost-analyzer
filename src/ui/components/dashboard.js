@@ -13,7 +13,10 @@ import { renderTableBody } from './table.js';
  * Render the aggregate dashboard view.
  */
 export function renderDashboard() {
-  const filtered = computeFilteredSessions();
+  // chatSessions are a limited fallback with no recoverable input/cost/AIC — they
+  // appear in the sidebar but are excluded from every Dashboard total (count,
+  // tokens, cost, AIC, workspaces), matching the server-side getDashboard filter.
+  const filtered = computeFilteredSessions().filter(s => s.source_type !== 'chatSessions');
   const d = store.dashboardData;
 
   const totalSessions = filtered.length;

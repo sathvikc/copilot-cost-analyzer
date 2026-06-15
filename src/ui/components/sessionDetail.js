@@ -33,9 +33,9 @@ export function renderSessionDetail() {
     }
 
     // Badges
+    // Estimated sessions are signalled inline by `~`-prefixed values (cards,
+    // timeline, model breakdown), not a header pill — so no badge here.
     document.getElementById('badge-quality')?.classList.add('hidden');
-    const isEstimated = session.source_type === 'chatSessions';
-    document.getElementById('badge-estimated')?.classList.toggle('hidden', !isEstimated);
     document.getElementById('badge-subagent')?.classList.toggle('hidden', !session.has_subagent);
     document.getElementById('badge-switch')?.classList.toggle('hidden', !session.has_model_switch);
     const retryCount = store.llmCalls.filter(c => c.debug_name && c.debug_name.includes('retry')).length;
@@ -90,12 +90,21 @@ export function renderSessionDetail() {
     }
 
     // Summary cards
+    // Limited-source (chatSessions) sessions have no recoverable input/cache/cost/AIC
+    // \u2014 show "\u2014", never "0" or a fabricated estimate. Output is shown with "~" when
+    // it was estimated from the response text (input === 0 but output > 0).
+    const isLimited = session.source_type === 'chatSessions';
+    const outputEstimated = isLimited && !session.total_input_tokens && session.total_output_tokens > 0;
     store.cardCalls = session.total_llm_calls;
-    store.cardInput = formatNumber(session.total_input_tokens);
-    store.cardOutput = formatNumber(session.total_output_tokens);
+    store.cardInput = (isLimited && !session.total_input_tokens) ? '\u2014' : formatNumber(session.total_input_tokens);
+    store.cardOutput = outputEstimated
+      ? '~' + formatNumber(session.total_output_tokens)
+      : ((isLimited && !session.total_output_tokens) ? '\u2014' : formatNumber(session.total_output_tokens));
     store.cardCached = session.total_cached_tokens != null ? formatNumber(session.total_cached_tokens) : '\u2014';
-    store.cardCost = (session.data_quality === 'limited' ? '~' : '') + formatCost(session.computed_cost);
-    store.cardAic = session.computed_aic > 0 ? (session.is_aic_approx ? '~' : '') + formatNumberWithCommas((session.computed_aic / 1e9).toFixed(2)) : '\u2014';
+    store.cardCost = isLimited ? '\u2014' : formatCost(session.computed_cost);
+    store.cardAic = (!isLimited && session.computed_aic > 0)
+      ? (session.is_aic_approx ? '~' : '') + formatNumberWithCommas((session.computed_aic / 1e9).toFixed(2))
+      : '\u2014';
     store.cardCacheHit = session.cache_hit_pct > 0 ? session.cache_hit_pct.toFixed(1) + '%' : '\u2014';
 
     // Card color classes
@@ -113,6 +122,9 @@ export function renderSessionDetail() {
       if (session.is_aic_approx) aicCardEl.title = 'Estimated from token ratio; actual AIC may differ';
       else aicCardEl.removeAttribute('title');
     }
+
+    // Limited-data note (chatSessions fallback) — explains the "—" fields.
+    document.getElementById('limited-data-note')?.classList.toggle('hidden', !isLimited);
 
     // Discrepancy note
     const hasRetryCalls = store.llmCalls.some(c => c.debug_name && c.debug_name.includes('retry'));
@@ -147,7 +159,7 @@ export function renderSessionModelBreakdown() {
   const byModel = {};
   for (const c of calls) {
     const m = c.model || 'unknown';
-    if (!byModel[m]) byModel[m] = { model: m, calls: 0, cost: 0, aic: 0, input_tokens: 0, output_tokens: 0, cached_tokens: 0, cache_write_tokens: null, hasCacheWrite: false };
+    if (!byModel[m]) byModel[m] = { model: m, calls: 0, cost: 0, aic: 0, input_tokens: 0, output_tokens: 0, cached_tokens: 0, cache_write_tokens: null, hasCacheWrite: false, outputEstimated: false };
     byModel[m].calls++;
     byModel[m].cost += c.cost || 0;
     byModel[m].input_tokens += c.input_tokens || 0;
@@ -157,6 +169,7 @@ export function renderSessionModelBreakdown() {
       byModel[m].cache_write_tokens = (byModel[m].cache_write_tokens || 0) + c.cache_write_tokens;
       byModel[m].hasCacheWrite = true;
     }
+    if (c.output_estimated) byModel[m].outputEstimated = true;
     if (c.aic > 0) byModel[m].aic += c.aic;
   }
   for (const m of Object.values(byModel)) {
@@ -167,15 +180,17 @@ export function renderSessionModelBreakdown() {
   const sessionSubCounts = session?.subagent_counts_json
     ? (() => { try { return JSON.parse(session.subagent_counts_json); } catch { return {}; } })()
     : {};
-  // Estimated sessions show real token counts but estimated cost/AIC — caption it.
-  const caption = session?.source_type === 'chatSessions'
-    ? '<p class="model-breakdown-caption">~ Cost and AIC are estimated; cache figures need debug logs.</p>'
+  // Limited-source (chatSessions): only output is known (estimated from the
+  // response text). Input, cache, cost and AIC need debug logs and are shown as "—".
+  const limited = session?.source_type === 'chatSessions';
+  const caption = limited
+    ? '<p class="model-breakdown-caption">~ Output is estimated from the response text. Input, cache, cost and AI Credits aren\'t recorded here — they need Copilot debug logs.</p>'
     : '';
   container.innerHTML = caption + list.map(m => {
     m.vendor = m.model.toLowerCase().includes('claude') ? 'Anthropic' : m.model.toLowerCase().includes('gpt') ? 'OpenAI' : '';
     m.aic = m.aic || 0;
     m.cost = m.displayCost || 0;
-    return renderModelCard(m, { subagentCounts: sessionSubCounts, showAic: true, showCacheWrite: false });
+    return renderModelCard(m, { subagentCounts: sessionSubCounts, showAic: true, showCacheWrite: false, limited, outputEstimated: limited && m.outputEstimated });
   }).join('');
 }
 

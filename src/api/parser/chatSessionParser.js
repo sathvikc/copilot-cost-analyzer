@@ -273,10 +273,12 @@ function parseChatSessionFile(filePath, sessionId) {
       timeSincePrev: null,
     });
 
-    // User message for this turn.
+    // User message for this turn. Store at the same whole-second granularity as
+    // the LLM call/agent response above (all share this request's instant) so
+    // the timeline can't order the message after its own agent response.
     const text = messageText(request);
     if (text) {
-      userMessages.push({ content: text, ts: tsMs, turnNumber });
+      userMessages.push({ content: text, ts: tsSec !== null ? tsSec * 1000 : null, turnNumber });
     }
 
     // Assistant response + reasoning.

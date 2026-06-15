@@ -14,7 +14,10 @@ import { formatNumber, formatLatency, latencyClass, formatCompact } from '../for
 export function buildLegacyEvents(turn) {
   const events = [];
   for (const msg of turn.userMessages || []) {
-    events.push({ type: 'userMessage', content: msg.content || '', ts: msg.ts, _order: 0 });
+    // Floor to whole seconds so a user message ties with its turn's (floored)
+    // LLM call rather than sorting just after it on sub-second noise.
+    const ts = msg.ts != null ? Math.floor(msg.ts) : msg.ts;
+    events.push({ type: 'userMessage', content: msg.content || '', ts, _order: 0 });
   }
   for (const tool of turn.toolCalls || []) {
     events.push({
@@ -27,7 +30,10 @@ export function buildLegacyEvents(turn) {
     events.push({ type: 'llmCall', ...call, ts: call.timestamp, _order: 2 });
   }
   events.sort((a, b) => {
-    if (a.ts != null && b.ts != null) return a.ts - b.ts;
+    if (a.ts != null && b.ts != null) {
+      if (a.ts !== b.ts) return a.ts - b.ts;
+      return a._order - b._order; // same instant -> user -> tool -> llm
+    }
     if (a.ts == null && b.ts != null) return 1;
     if (a.ts != null && b.ts == null) return -1;
     return a._order - b._order;
@@ -107,6 +113,10 @@ export function renderTimeline() {
     const hasSubAgent = calls.some(c => c.debug_name && c.debug_name.toLowerCase().includes('subagent'));
     const totalTokens = calls.reduce((s, c) => s + (c.input_tokens || 0) + (c.output_tokens || 0), 0);
     const aicNum = turn.aicBadge || '';
+    // Limited-source (chatSessions): input/cache/cost/AIC are unrecoverable, output
+    // is estimated from the response text — render "—"/"~" instead of bare numbers.
+    const isLimitedTurn = calls.some(c => c.is_limited_source);
+    const turnOutEstimated = calls.some(c => c.output_estimated);
 
     let promptPreview = '';
     const firstMsg = turnMsgs.find(m => m.content);
@@ -142,7 +152,7 @@ export function renderTimeline() {
           ${retryPill}
           ${turnTools.length > 0 ? `<span class="turn-pill tool-pill" title="${turnTools.length} tool call${turnTools.length !== 1 ? 's' : ''}">\uD83D\uDD27 ${turnTools.length}</span>` : ''}
           ${calls.length > 0 ? `<span class="turn-pill llm-pill" title="${calls.length} LLM call${calls.length !== 1 ? 's' : ''}">${hasSubAgent ? '\uD83D\uDD17' : '\uD83E\uDD16'} ${calls.length}</span>` : ''}
-          ${totalTokens > 0 ? `<span class="turn-pill token-pill" title="Input + Output tokens">${formatCompact(totalTokens)} tok</span>` : ''}
+          ${totalTokens > 0 ? `<span class="turn-pill token-pill" title="${isLimitedTurn ? 'Estimated output tokens' : 'Input + Output tokens'}">${turnOutEstimated ? '~' : ''}${formatCompact(totalTokens)} tok</span>` : ''}
           ${aicNum ? `<span class="turn-pill aic-pill ${aicClass}" title="Total AI Credits this turn">${aicNum} AIC</span>` : ''}
           ${coldBadge}
         </span>
@@ -208,6 +218,10 @@ export function renderTimeline() {
     if (calls.length > 0 || turnTools.length > 0) {
       const totalInput = calls.reduce((s, c) => s + (c.input_tokens || 0), 0);
       const totalOutput = calls.reduce((s, c) => s + (c.output_tokens || 0), 0);
+      const inputCell = (isLimitedTurn && totalInput === 0) ? '—' : formatCompact(totalInput);
+      const outputCell = turnOutEstimated
+        ? '~' + formatCompact(totalOutput)
+        : ((isLimitedTurn && totalOutput === 0) ? '—' : formatCompact(totalOutput));
       const summaryRow = document.createElement('div');
       summaryRow.className = 'timeline-row turn-summary';
       summaryRow.innerHTML = `
@@ -215,8 +229,8 @@ export function renderTimeline() {
         <span class="step-num"></span>
         <span class="row-icon"></span>
         <span class="row-name turn-summary-label">Turn ${turnNum} total</span>
-        <span class="row-col">${formatCompact(totalInput)}</span>
-        <span class="row-col">${formatCompact(totalOutput)}</span>
+        <span class="row-col">${inputCell}</span>
+        <span class="row-col">${outputCell}</span>
         <span class="row-col">${turnTools.length > 0 ? turnTools.length + ' tools' : '\u2014'}</span>
         <span class="row-col">${calls.length} LLM</span>
         <span class="row-col">\u2014</span>
@@ -296,6 +310,12 @@ function renderLlmCall(call, step) {
   row.setAttribute('tabindex', '0');
   row.setAttribute('aria-label', `Step ${step}: LLM call ${call.model || 'unknown'}`);
   const cached = call.cached_tokens != null ? formatNumber(call.cached_tokens) : '\u2014';
+  // Limited-source (chatSessions) calls have no recoverable input \u2014 show "\u2014", not "0".
+  // Output is shown with "~" when estimated from the response text.
+  const inputStr = (call.is_limited_source && !call.input_tokens) ? '\u2014' : formatNumber(call.input_tokens);
+  const outputStr = call.output_estimated
+    ? '~' + formatNumber(call.output_tokens)
+    : ((call.is_limited_source && !call.output_tokens) ? '\u2014' : formatNumber(call.output_tokens));
   const deltaVal = call.delta_input || 0;
   const deltaSign = deltaVal > 0 ? '+' : '';
   const callAicVal = call.aic > 0 ? (call.aic / 1e9).toFixed(2) : '';
@@ -311,8 +331,8 @@ function renderLlmCall(call, step) {
     <span class="step-num">${step}</span>
     <span class="row-icon" aria-hidden="true">\uD83E\uDD16</span>
     <span class="row-name">${subLabel}${escapeHtml(call.model)} ${retryBadge}</span>
-    <span class="row-col">${formatNumber(call.input_tokens)}</span>
-    <span class="row-col">${formatNumber(call.output_tokens)}</span>
+    <span class="row-col">${inputStr}</span>
+    <span class="row-col">${outputStr}</span>
     <span class="row-col">${cached}</span>
     <span class="row-col delta-${deltaVal > 0 ? 'up' : 'same'}">${deltaSign}${formatNumber(deltaVal)}</span>
     <span class="row-col ${ttftClass}">${call.ttft > 10000 ? '<span class="ttft-warn" title="Slow response \u2014 TTFT >10s">\u26A0\uFE0F</span>' : ''}${formatLatency(call.ttft)}</span>
