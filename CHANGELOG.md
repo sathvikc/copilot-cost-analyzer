@@ -11,14 +11,16 @@ extension is in active development.
 
 ### Added
 - **Clearer cache-break reasons in the Cache tab** — when the provider drops a cached prefix that was actually unchanged (a true eviction, or a TTL expiry after an idle gap), the call is now labeled **Cache Evicted** / **Cache Expired** and reports how many cached tokens were lost, instead of vaguely blaming the most recent messages. When a message *inside* the cached prefix really did change, it's pinpointed as **Prefix Edited** at the exact message. The verdict comes from a content-level diff of the request history, so the stated cause is evidence-backed rather than inferred from token counts alone.
+- **Opening a chat from another workspace asks where to open it** — when a session belongs to a different workspace than the one you're in, the extension offers to open it in the current window or to open that workspace in a new window (so the chat's file references resolve), instead of silently opening it in the wrong context.
 
 ### Changed
 - **Sharper tooltips for prompt-prefix breaks** — the `Sys Prompt` and `Tools Changed` badges now explain that the cached prefix diverged at that point, and idle-gap evictions are attributed to provider cache TTL.
+- **Estimated sessions are clearer about what they don't know** — chat-history-only (estimated) sessions are now excluded from Dashboard totals (count, tokens, cost, AI Credits, workspaces) and show "—" for fields that need debug logs (input, cache, cost, AI Credits); only the output token count is shown, marked `~` because it's estimated from the response text. The earlier header "estimated" pill and "requires debug logs" card are replaced with lighter inline `~` markers and a short limited-data note.
 
 ## [0.8.0] - 2026-06-14
 
 ### Added
-- **Adapts to whatever Copilot data is available** — when agent debug file logging is on, sessions show full cost, cache, and retry detail as before. When it's off, the dashboard is no longer blank: a setup view explains how to enable logging, and you can fall back to Copilot's always-on chat history to see those sessions with an estimated cost (badged `~ est`). Estimated sessions are clearly labeled, sit behind a one-time opt-in, and upgrade to full detail automatically once logging is enabled. A header **⚙ Setup** button returns you to the setup view any time.
+- **Adapts to whatever Copilot data is available** — when agent debug file logging is on, sessions show full cost, cache, and retry detail as before. When it's off, the dashboard is no longer blank: a setup view explains how to enable logging, and you can fall back to Copilot's always-on chat history to surface those sessions as estimated. Estimated sessions are clearly labeled, sit behind a one-time opt-in, and upgrade to full detail automatically once logging is enabled. A header **⚙ Setup** button returns you to the setup view any time.
 
 ## [0.7.0] - 2026-06-12
 
