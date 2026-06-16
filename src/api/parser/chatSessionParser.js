@@ -24,10 +24,16 @@ const fs = require('fs');
 
 /**
  * Apply one patch to the reconstructed root object (mutates in place).
+ *
+ * kind:2 is an array DELTA, not a replacement: VS Code emits the newly-added
+ * elements (as an array, or as a numeric-keyed object) to be appended/merged
+ * into the array at the key path. Treating an array-valued kind:2 as a full
+ * replacement collapses an accumulating list (e.g. `requests`, or a turn's
+ * streamed `response` parts) down to its last delta — losing all prior history.
  * @param {object} root - the session object being rebuilt
  * @param {Array<string|number>} k - key-path
  * @param {*} v - value
- * @param {number} kind - 1 (set) or 2 (numeric-keyed array merge)
+ * @param {number} kind - 1 (set) or 2 (array delta: append / merge by index)
  */
 function applyPatch(root, k, v, kind) {
   if (!Array.isArray(k) || k.length === 0) return;
@@ -41,16 +47,23 @@ function applyPatch(root, k, v, kind) {
     node = node[key];
   }
   const last = k[k.length - 1];
-  const isNumericKeyed = kind === 2 && v && typeof v === 'object' && !Array.isArray(v)
-    && Object.keys(v).every((x) => !Number.isNaN(Number(x)));
-  if (isNumericKeyed) {
-    if (!Array.isArray(node[last])) node[last] = [];
-    for (const idxKey of Object.keys(v)) {
-      node[last][Number(idxKey)] = v[idxKey];
+  if (kind === 2) {
+    // Array form: append the delta's elements to the existing array.
+    if (Array.isArray(v)) {
+      if (!Array.isArray(node[last])) node[last] = [];
+      for (const el of v) node[last].push(el);
+      return;
     }
-  } else {
-    node[last] = v;
+    // Numeric-keyed object form: merge elements at their (absolute) indices.
+    if (v && typeof v === 'object' && Object.keys(v).every((x) => !Number.isNaN(Number(x)))) {
+      if (!Array.isArray(node[last])) node[last] = [];
+      for (const idxKey of Object.keys(v)) {
+        node[last][Number(idxKey)] = v[idxKey];
+      }
+      return;
+    }
   }
+  node[last] = v;
 }
 
 /**
@@ -369,4 +382,4 @@ function parseChatSessionFile(filePath, sessionId) {
   };
 }
 
-module.exports = { parseChatSessionFile, reconstructSession, applyPatch };
+module.exports = { parseChatSessionFile, reconstructSession, applyPatch, messageText };

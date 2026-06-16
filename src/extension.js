@@ -249,6 +249,42 @@ async function showPanel(context) {
       // Construct the vscode-chat-session URI (same format as VS Code's LocalChatSessionUri.forSession)
       const encoded = Buffer.from(sessionId).toString('base64url').replace(/=+$/, '');
       const uri = vscode.Uri.from({ scheme: 'vscode-chat-session', authority: 'local', path: '/' + encoded });
+
+      // A chat session belongs to the workspace it was created in; its file
+      // references resolve against that root. Revealing it from a *different*
+      // workspace opens the editor but in the wrong context — so when the
+      // session's workspace differs from the current one, ask the user where to
+      // open it instead of doing it silently.
+      const sessionWs = db
+        ? db.queryOne('SELECT workspace_path FROM sessions WHERE session_id = $sid', { $sid: sessionId })?.workspace_path
+        : null;
+      const currentWs = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || null;
+      const samePath = (a, b) => !!a && !!b && path.resolve(a) === path.resolve(b);
+
+      if (sessionWs && currentWs && !samePath(sessionWs, currentWs)) {
+        const wsName = path.basename(sessionWs) || sessionWs;
+        const choice = await vscode.window.showInformationMessage(
+          'This chat belongs to a different workspace.',
+          {
+            modal: true,
+            detail: `${wsName}\n${sessionWs}\n\nOpen the chat in this window, or open that workspace in a new window?`,
+          },
+          'This Window', 'New Window'
+        );
+        if (!choice) return { opened: false, canceled: true };
+        if (choice === 'New Window') {
+          // Land the user in the correct workspace so the chat's context
+          // resolves. If the folder no longer exists, fall back to revealing
+          // the chat in the current window.
+          if (fs.existsSync(sessionWs)) {
+            await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(sessionWs), { forceNewWindow: true });
+            return { opened: true, newWindow: true };
+          }
+          vscode.window.showWarningMessage(`Workspace folder not found: ${sessionWs}. Opening the chat in this window instead.`);
+        }
+        // 'This Window' (or the new-window fallback) falls through to vscode.open.
+      }
+
       // Note: The vscode-chat-session scheme is registered as a chat editor in VS Code,
       // so vscode.open always opens in the editor area. The sidebar loadSession() API
       // is internal-only and not accessible from extensions.

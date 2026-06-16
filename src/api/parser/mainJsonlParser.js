@@ -478,19 +478,36 @@ async function parseSessionDirectory(dirPath, sessionId) {
 
   // Classify cache breaks: detect WHY cached_tokens dropped between consecutive calls.
   // Uses separate baselines for main vs subagent (matching delta recomputation above).
-  const CACHE_BREAK_THRESHOLD = 1000;
+  //
+  // A "break" is judged relative to the prior cache, not by an absolute token count:
+  // a fixed 1k threshold flags trivial ~4% dips (cache churn / rounding) as breaks
+  // while under-reporting on small contexts. We require the cache to fall by a
+  // meaningful FRACTION of its previous value (and clear a small floor so we ignore
+  // rounding noise on tiny caches). This matches the Cache-tab UI's 20%-drop rule.
+  const CACHE_BREAK_FRACTION = 0.2; // cached fell by >20% of the prior value …
+  const CACHE_BREAK_FLOOR = 256;    // … and by at least this many tokens
+  const isCacheBreak = (prev, curr) => {
+    const drop = (prev.cachedTokens || 0) - (curr.cachedTokens || 0);
+    return drop > CACHE_BREAK_FLOOR && drop > (prev.cachedTokens || 0) * CACHE_BREAK_FRACTION;
+  };
   let prevMain = null;
   let prevSub = null;
   for (const curr of allLlmCalls) {
     const prev = curr.isSubagent ? prevSub : prevMain;
     if (prev) {
-      const cacheDrop = (prev.cachedTokens || 0) - (curr.cachedTokens || 0);
-      if (cacheDrop > CACHE_BREAK_THRESHOLD) {
+      if (isCacheBreak(prev, curr)) {
         const isRetry = (curr.debugName || '').startsWith('retry');
+        // Compaction = the SAME model's input was trimmed substantially (>20%) to
+        // fit the context window; judged proportionally for the same reason.
         const inputDrop = (prev.inputTokens || 0) - (curr.inputTokens || 0);
-        if (inputDrop > CACHE_BREAK_THRESHOLD) {
-          curr.cacheBreakType = 'compaction';
-        } else if (curr.model !== prev.model) {
+        const isCompaction = inputDrop > (prev.inputTokens || 0) * CACHE_BREAK_FRACTION;
+        // Order matters: an identity change (model / subagent / system prompt /
+        // tools / options) invalidates the cache on its own and brings a fresh
+        // input baseline, so it must be checked BEFORE compaction. A model switch
+        // in particular drops input as a side effect — classifying that as
+        // "compaction" is wrong. Compaction only applies when nothing structural
+        // changed but the same model's context was trimmed to fit the window.
+        if (curr.model !== prev.model) {
           curr.cacheBreakType = 'model_switch';
         } else if (curr.isSubagent !== prev.isSubagent) {
           curr.cacheBreakType = 'subagent_boundary';
@@ -500,6 +517,8 @@ async function parseSessionDirectory(dirPath, sessionId) {
           curr.cacheBreakType = 'tools_changed';
         } else if (curr.requestOptions && prev.requestOptions && curr.requestOptions !== prev.requestOptions) {
           curr.cacheBreakType = 'options_changed';
+        } else if (isCompaction) {
+          curr.cacheBreakType = 'compaction';
         } else if (isRetry) {
           curr.cacheBreakType = 'retry';
         } else {
@@ -519,8 +538,7 @@ async function parseSessionDirectory(dirPath, sessionId) {
     const prev = allLlmCalls[i - 1];
     const curr = allLlmCalls[i];
     if (curr.isSubagent !== prev.isSubagent && !curr.cacheBreakType) {
-      const cacheDrop = (prev.cachedTokens || 0) - (curr.cachedTokens || 0);
-      if (cacheDrop > CACHE_BREAK_THRESHOLD) {
+      if (isCacheBreak(prev, curr)) {
         curr.cacheBreakType = 'subagent_boundary';
       }
     }

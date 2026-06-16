@@ -182,11 +182,10 @@ export function renderSessionModelBreakdown() {
     : {};
   // Limited-source (chatSessions): only output is known (estimated from the
   // response text). Input, cache, cost and AIC need debug logs and are shown as "—".
+  // No caption here — the "~" on the output value already signals "estimated" and
+  // the limited-data banner at the top of the view carries the full explanation.
   const limited = session?.source_type === 'chatSessions';
-  const caption = limited
-    ? '<p class="model-breakdown-caption">~ Output is estimated from the response text. Input, cache, cost and AI Credits aren\'t recorded here — they need Copilot debug logs.</p>'
-    : '';
-  container.innerHTML = caption + list.map(m => {
+  container.innerHTML = list.map(m => {
     m.vendor = m.model.toLowerCase().includes('claude') ? 'Anthropic' : m.model.toLowerCase().includes('gpt') ? 'OpenAI' : '';
     m.aic = m.aic || 0;
     m.cost = m.displayCost || 0;

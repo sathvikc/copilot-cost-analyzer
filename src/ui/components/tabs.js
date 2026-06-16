@@ -17,26 +17,23 @@ export function isEstimatedSession() {
 }
 
 /**
- * Inline "this needs debug logs" notice for features that only exist in debug
- * logs. Includes the same Open-Setting button as the Option A setup notice
- * (wired via a delegated `.js-open-copilot-setting` listener in events.js).
+ * Muted one-liner shown on the Cache / Retry tabs for estimated (chatSessions)
+ * sessions, which carry no per-call cache/retry data.
+ *
+ * These sessions were reconstructed from Copilot's chat history after the fact.
+ * Debug logs can't be enabled retroactively, so there is nothing actionable for
+ * an already-captured session — we deliberately drop the alarming card/icon and
+ * the "Open Setting" CTA (which belongs in the first-run setup flow, not a
+ * per-session view) and just state, plainly, why the view is empty.
  * @param {string} feature - Human label, e.g. "Cache analysis".
  * @returns {string} HTML
  */
 export function debugRequiredNotice(feature) {
   return `
-    <div class="debug-required-card" role="note">
-      <div class="debug-required-icon" aria-hidden="true">🔍</div>
-      <div class="debug-required-body">
-        <p class="debug-required-title">${escapeHtml(feature)} needs Copilot debug logs</p>
-        <p class="debug-required-desc">
-          This session was reconstructed from Copilot's chat history, which doesn't record
-          ${escapeHtml(feature.toLowerCase())}. Enable debug logging to capture it for new sessions.
-        </p>
-        <button class="btn btn-secondary js-open-copilot-setting"
-          aria-label="Open Copilot debug logging setting">⚙ Open Setting</button>
-      </div>
-    </div>`;
+    <p class="debug-unavailable-note" role="note">
+      ${escapeHtml(feature)} isn't available here — this session was reconstructed from
+      Copilot's chat history, which doesn't record it. Only debug logs capture this.
+    </p>`;
 }
 
 /**

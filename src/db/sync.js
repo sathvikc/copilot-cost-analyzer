@@ -8,7 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const { parseSessionDirectory } = require('../api/parser/mainJsonlParser');
-const { parseChatSessionFile } = require('../api/parser/chatSessionParser');
+const { parseChatSessionFile, reconstructSession, messageText } = require('../api/parser/chatSessionParser');
 const { loadPricing, computeCallCost } = require('../api/compute/costComputer');
 const { computeGlobalAicRatio, computeSessionMetrics, effectiveAicRatio } = require('../api/compute/sessionMetrics');
 const { getWorkspaceStoragePaths, findWorkspaceFile } = require('../utils/paths');
@@ -157,71 +157,94 @@ function findChatSessionFile(workspaceHash, sessionId) {
 }
 
 /**
- * Parse chatSessions JSONL file ONCE and extract all needed data.
+ * Reconstruct chatSessions canonical state for a debug-logs session: title,
+ * mode, location, and the list of requests that SURVIVED in the user-facing chat
+ * history (each with whether it was explicitly canceled).
+ *
+ * chatSessions is the source of truth for "what the conversation looks like
+ * now". A turn can drop out of the timeline two ways, which we detect together
+ * downstream (see computeCanceledTurns):
+ *   - Explicit cancel (Stop): the request stays in the list with an
+ *     errorDetails.code === 'canceled' result → flagged here via `canceled`.
+ *   - Edit-and-resend: editing a sent message REMOVES the original request from
+ *     this list entirely (no marker) while the debug log still has it → detected
+ *     downstream by its absence from `keptRequests`.
+ *
  * @param {string} sessionId
  * @param {string} workspaceHash
- * @returns {{ title: string|null, canceledTurns: Set<number>, mode: string|null, initialLocation: string|null }}
+ * @returns {{ title: string|null, mode: string|null, initialLocation: string|null,
+ *             keptRequests: Array<{ text: string, canceled: boolean }> }}
  */
 function parseChatSession(sessionId, workspaceHash) {
-  const result = { title: null, canceledTurns: new Set(), mode: null, initialLocation: null };
-  
+  const result = { title: null, mode: null, initialLocation: null, keptRequests: [] };
+
   const chatPath = findChatSessionFile(workspaceHash, sessionId);
   if (!chatPath || !fs.existsSync(chatPath)) return result;
-  
+
   try {
-    const lines = fs.readFileSync(chatPath, 'utf8').split('\n');
-    const canceledIndices = new Set();
-    let maxRequestIndex = -1;
-    
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const obj = JSON.parse(line);
-        
-        if (obj.kind === 0 && obj.v) {
-          // Initial snapshot — extract title, mode, location
-          if (!result.title && typeof obj.v.customTitle === 'string' && obj.v.customTitle) {
-            result.title = obj.v.customTitle;
-          }
-          if (!result.initialLocation) {
-            result.initialLocation = obj.v.initialLocation || null;
-          }
-          const reqs = obj.v.requests;
-          if (!result.mode && Array.isArray(reqs) && reqs.length > 0) {
-            const modeInfo = reqs[0].modeInfo;
-            result.mode = modeInfo?.modeId || modeInfo?.kind || null;
-          }
-        } else if (obj.kind === 1) {
-          const k = obj.k;
-          // Title update
-          if (Array.isArray(k) && k.length === 1 && k[0] === 'customTitle'
-              && typeof obj.v === 'string' && obj.v) {
-            result.title = obj.v;
-          }
-          // Cancel detection
-          if (Array.isArray(k) && k.length >= 2 && k[0] === 'requests' && typeof k[1] === 'number') {
-            if (k[1] > maxRequestIndex) maxRequestIndex = k[1];
-          }
-          if (Array.isArray(k) && k.length === 3 && k[0] === 'requests' && typeof k[1] === 'number' && k[2] === 'result') {
-            const v = obj.v;
-            if (v && typeof v === 'object' && v.errorDetails && v.errorDetails.code === 'canceled') {
-              canceledIndices.add(k[1]);
-            }
-          }
-        }
-      } catch { /* malformed line */ }
+    const lines = fs.readFileSync(chatPath, 'utf8').split('\n').filter((l) => l.trim());
+    const session = reconstructSession(lines);
+    if (!session || typeof session !== 'object') return result;
+
+    result.title = (typeof session.customTitle === 'string' && session.customTitle) ? session.customTitle : null;
+    result.initialLocation = session.initialLocation || null;
+
+    const reqs = Array.isArray(session.requests) ? session.requests : [];
+    if (reqs.length > 0) {
+      const modeInfo = reqs[0]?.modeInfo;
+      result.mode = modeInfo?.modeId || modeInfo?.kind || null;
     }
-    
-    // Determine edited/hidden turns
-    for (const idx of canceledIndices) {
-      const nextIdx = idx + 1;
-      if (nextIdx <= maxRequestIndex && !canceledIndices.has(nextIdx)) {
-        result.canceledTurns.add(idx);
-      }
+
+    for (const request of reqs) {
+      if (!request || typeof request !== 'object') continue;
+      const text = messageText(request);
+      if (text == null) continue; // a request with no user text isn't a timeline turn
+      const canceled = request.result?.errorDetails?.code === 'canceled';
+      result.keptRequests.push({ text: text.trim(), canceled });
     }
   } catch { /* unreadable */ }
-  
+
   return result;
+}
+
+/**
+ * Map debug-log user messages onto canceled/edited flags using the canonical
+ * chatSessions request list. Returns a Set of 0-based indices into
+ * `userMessages` (debug-log order) that should render struck-through.
+ *
+ * Each kept request is matched to a debug-log message by exact (trimmed) text,
+ * positionally within repeated texts. A debug-log message that finds no kept
+ * counterpart was edited away; a matched-but-canceled request was stopped.
+ * When there is no canonical list to compare against (chatSessions missing /
+ * unreadable), we flag nothing rather than guess.
+ *
+ * @param {Array<{content: string}>} userMessages - debug-log user messages, in order
+ * @param {Array<{text: string, canceled: boolean}>} keptRequests
+ * @returns {Set<number>}
+ */
+function computeCanceledTurns(userMessages, keptRequests) {
+  const canceled = new Set();
+  if (!Array.isArray(keptRequests) || keptRequests.length === 0) return canceled;
+
+  // Bucket kept requests by text so repeated prompts match positionally.
+  const buckets = new Map();
+  for (const r of keptRequests) {
+    const key = r.text || '';
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(r);
+  }
+
+  for (let i = 0; i < userMessages.length; i++) {
+    const text = (userMessages[i]?.content || '').trim();
+    const bucket = buckets.get(text);
+    if (bucket && bucket.length > 0) {
+      const match = bucket.shift();
+      if (match.canceled) canceled.add(i); // survived but was explicitly stopped
+    } else {
+      canceled.add(i); // present in the debug log, gone from chat history → edited away
+    }
+  }
+  return canceled;
 }
 
 /**
@@ -233,8 +256,8 @@ function parseChatSession(sessionId, workspaceHash) {
  * @param {number} [globalAicRatio] - Pre-computed AIC-per-token ratio for estimating missing AIC
  * @returns {Promise<boolean>} true if synced, false if skipped (up to date)
  */
-const PARSER_VERSION = 30; // bump when debug-logs parser logic changes to force re-sync
-const CHAT_PARSER_VERSION = 2; // bump when chatSessions parser logic changes to force re-sync
+const PARSER_VERSION = 31; // bump when debug-logs parser logic changes to force re-sync
+const CHAT_PARSER_VERSION = 3; // bump when chatSessions parser logic changes to force re-sync
 
 // chatSessions records the assistant's response text but, for sessions captured
 // while Copilot debug-logging was off, no token counts. We can still *count*
@@ -294,7 +317,11 @@ async function syncDebugLogSession(db, sessionInfo, globalAicRatio) {
     log.log(`Session ${sessionId.slice(0, 8)} title: "${sessionTitle.slice(0, 40)}..."`);
   }
 
-  const canceledTurns = chatData.canceledTurns;
+  // Cross-reference debug-log user messages against the canonical chatSessions
+  // request list to flag turns that were canceled or edited away (struck through
+  // in the timeline). Computed in debug-log index space — the order
+  // insertUserMessages walks.
+  const canceledTurns = computeCanceledTurns(parsed.userMessages, chatData.keptRequests);
 
   // Load pricing
   const pricingPath = path.join(debugLogPath, 'models.json');
