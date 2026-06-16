@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS llm_calls (
   tools_file TEXT,
   request_options TEXT,
   cache_break_type TEXT,
+  cache_break_detail TEXT,
   time_since_prev INTEGER,
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );

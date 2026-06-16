@@ -256,7 +256,7 @@ function computeCanceledTurns(userMessages, keptRequests) {
  * @param {number} [globalAicRatio] - Pre-computed AIC-per-token ratio for estimating missing AIC
  * @returns {Promise<boolean>} true if synced, false if skipped (up to date)
  */
-const PARSER_VERSION = 31; // bump when debug-logs parser logic changes to force re-sync
+const PARSER_VERSION = 32; // bump when debug-logs parser logic changes to force re-sync
 const CHAT_PARSER_VERSION = 3; // bump when chatSessions parser logic changes to force re-sync
 
 // chatSessions records the assistant's response text but, for sessions captured
@@ -590,11 +590,11 @@ function insertLlmCalls(db, calls) {
       INSERT INTO llm_calls (
         session_id, turn_number, call_number, model, input_tokens,
         cached_tokens, cache_write_tokens, output_tokens, cost, aic, timestamp, debug_name, status, span_id, ttft,
-        delta_input, delta_cached, is_subagent, parent_span_id, system_prompt_file, tools_file, request_options, cache_break_type, time_since_prev
+        delta_input, delta_cached, is_subagent, parent_span_id, system_prompt_file, tools_file, request_options, cache_break_type, cache_break_detail, time_since_prev
       ) VALUES (
         $sid, $turn, $num, $model, $input,
         $cached, $cacheWrite, $output, $cost, $aic, $ts, $debug, $status, $spanId, $ttft,
-        $dInput, $dCached, $isSub, $parentSpanId, $sysPrompt, $toolsFile, $reqOpts, $cacheBreak, $timeSincePrev
+        $dInput, $dCached, $isSub, $parentSpanId, $sysPrompt, $toolsFile, $reqOpts, $cacheBreak, $cacheBreakDetail, $timeSincePrev
       )
     `, {
       $sid: call.sessionId,
@@ -620,6 +620,7 @@ function insertLlmCalls(db, calls) {
       $toolsFile: call.toolsFile || null,
       $reqOpts: call.requestOptions || null,
       $cacheBreak: call.cacheBreakType || null,
+      $cacheBreakDetail: call.cacheBreakDetail || null,
       $timeSincePrev: call.timeSincePrev !== null ? call.timeSincePrev : null
     });
   }

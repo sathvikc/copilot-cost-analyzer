@@ -9,6 +9,112 @@ const fs = require('fs');
 const readline = require('readline');
 const path = require('path');
 
+function safeJson(v) {
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+
+/**
+ * FNV-1a 32-bit hash of a string — fast and compact. We only use it to detect
+ * whether two normalized messages differ; it is never reversed or persisted.
+ * @param {string} str
+ * @returns {number} unsigned 32-bit hash
+ */
+function hashText(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/**
+ * Normalize a request's `inputMessages` into compact per-message signatures
+ * `{role, name, len, hash}`, mirroring VS Code's Cache Explorer normalization so
+ * we can diff two consecutive requests' prompt prefixes. We keep only the text
+ * length + hash (not the text itself) so signatures stay tiny and never reach
+ * the DB. Part concatenation matches the Cache Explorer:
+ *   text / reasoning            -> content
+ *   tool_call                   -> "call:<name>" + JSON(arguments)
+ *   tool_call_response / result -> response (or content), stringified
+ *   tool_search_output          -> JSON({id,status,tools})
+ *
+ * @param {Array|string} inputMessages - array of {role, parts} or a JSON string
+ * @returns {Array<{role:string,name:string|undefined,len:number,hash:number}>|null}
+ */
+function normalizeMessagesForCache(inputMessages) {
+  let msgs = inputMessages;
+  if (typeof msgs === 'string') {
+    try { msgs = JSON.parse(msgs); } catch { return null; }
+  }
+  if (!Array.isArray(msgs) || msgs.length === 0) return null;
+  const out = [];
+  for (const m of msgs) {
+    if (!m || typeof m !== 'object') { out.push({ role: 'unknown', name: undefined, len: 0, hash: 0 }); continue; }
+    let role = typeof m.role === 'string' ? m.role : 'unknown';
+    const name = typeof m.name === 'string' ? m.name : undefined;
+    let text = '';
+    let sawTool = false, sawText = false, sawSearch = false;
+    if (Array.isArray(m.parts)) {
+      for (const p of m.parts) {
+        if (!p || typeof p !== 'object') continue;
+        switch (p.type) {
+          case undefined:
+          case 'text':
+          case 'reasoning':
+            if (typeof p.content === 'string') { text += p.content; sawText = true; }
+            break;
+          case 'tool_call':
+            if (p.name) text += `call:${p.name}`;
+            if (p.arguments !== undefined) text += safeJson(p.arguments);
+            break;
+          case 'tool_call_response':
+          case 'tool_result':
+            if (typeof p.response === 'string') text += p.response;
+            else if (p.response !== undefined) text += safeJson(p.response);
+            else if (typeof p.content === 'string') text += p.content;
+            else if (p.content !== undefined) text += safeJson(p.content);
+            sawTool = true;
+            break;
+          case 'tool_search_output':
+            text += safeJson({ id: p.id, status: p.status, tools: p.tools });
+            sawSearch = true;
+            break;
+        }
+      }
+    }
+    if (sawSearch && !sawText) role = 'tool_search';
+    else if (sawTool && !sawText) role = 'tool';
+    if (text.length === 0 && role === 'unknown') text = safeJson(m);
+    out.push({ role, name, len: text.length, hash: hashText(text) });
+  }
+  return out;
+}
+
+/**
+ * Compare two requests' normalized prompt prefixes (prev → curr) to localize a
+ * cache break. Mirrors the Cache Explorer's index-by-index walk, but — unlike it
+ * — a tail-only append is NOT treated as a break: messages added at the END
+ * cannot evict a previously-cached prefix. So a byte-identical shared prefix
+ * means the drop was a true provider-side eviction (nothing structural changed),
+ * while a difference INSIDE the shared prefix is a real structural cause the
+ * cached-token counts alone cannot localize.
+ *
+ * @param {Array|null} a - prev signatures
+ * @param {Array|null} b - curr signatures
+ * @returns {{comparable:boolean, prefixIdentical?:boolean, firstChange?:number, how?:string}}
+ */
+function diffMessagePrefix(a, b) {
+  if (!a || !b || a.length === 0 || b.length === 0) return { comparable: false };
+  const shared = Math.min(a.length, b.length);
+  for (let i = 0; i < shared; i++) {
+    const x = a[i], y = b[i];
+    if (x.role === y.role && x.name === y.name && x.len === y.len && x.hash === y.hash) continue;
+    return { comparable: true, prefixIdentical: false, firstChange: i, how: x.len !== y.len ? 'lengthChange' : 'contentDrift' };
+  }
+  return { comparable: true, prefixIdentical: true };
+}
+
 /**
  * Parse a debug log JSONL file into session events.
  * @param {string} filePath - Absolute path to main.jsonl or subagent file
@@ -171,9 +277,15 @@ async function parseDebugLog(filePath, sessionId) {
         systemPromptFile: attrs.systemPromptFile || null,
         toolsFile: attrs.toolsFile || null,
         requestOptions: attrs.requestOptions || null,
-        cacheBreakType: null, // classified after all calls are collected
-        timeSincePrev: null   // seconds since previous call (set during classification)
+        cacheBreakType: null,   // classified after all calls are collected
+        cacheBreakDetail: null, // content-diff verdict for the break (JSON string)
+        timeSincePrev: null     // seconds since previous call (set during classification)
       };
+
+      // Transient prompt-prefix signature used only during classification to
+      // diff this request against the previous one; stripped before returning so
+      // it never reaches the DB layer.
+      call._msgSig = normalizeMessagesForCache(attrs.inputMessages);
 
       llmCalls.push(call);
       eventLog.push({ type: 'llm_request', lineIndex: lineCount, turnNumber });
@@ -524,6 +636,24 @@ async function parseSessionDirectory(dirPath, sessionId) {
         } else {
           curr.cacheBreakType = 'provider_eviction';
         }
+        // Content-diff refinement: when the metadata ladder found no structural
+        // cause (provider_eviction), compare the actual prompt prefixes. A
+        // byte-identical prefix confirms a genuine provider-side eviction — the
+        // cached content was unchanged, the provider simply dropped it (do NOT
+        // blame appended messages, the mistake VS Code's Cache Explorer makes).
+        // A change INSIDE the established prefix (index >= 1) is a real
+        // structural cause the token counts can't localize, e.g. an earlier tool
+        // result was pruned/edited. A change at index 0 is inconclusive (some
+        // logs record only the per-turn delta, not the full prefix), so we leave
+        // it as a plain eviction.
+        if (curr.cacheBreakType === 'provider_eviction' && prev._msgSig && curr._msgSig) {
+          const d = diffMessagePrefix(prev._msgSig, curr._msgSig);
+          if (d.comparable && d.prefixIdentical) {
+            curr.cacheBreakDetail = JSON.stringify({ kind: 'eviction' });
+          } else if (d.comparable && !d.prefixIdentical && d.firstChange >= 1) {
+            curr.cacheBreakDetail = JSON.stringify({ kind: 'prefix_change', at: d.firstChange, how: d.how });
+          }
+        }
         // Compute time gap from previous call (useful for eviction analysis)
         if (prev.timestamp && curr.timestamp) {
           curr.timeSincePrev = Math.round(curr.timestamp - prev.timestamp);
@@ -543,6 +673,10 @@ async function parseSessionDirectory(dirPath, sessionId) {
       }
     }
   }
+
+  // Drop the transient prompt-prefix signatures — they exist only for the diff
+  // above and must not flow into the DB layer or callers.
+  for (const c of allLlmCalls) { delete c._msgSig; }
 
   return {
     llmCalls: allLlmCalls,

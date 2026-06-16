@@ -241,4 +241,72 @@ describe('parseSessionDirectory', () => {
     expect(result.userMessages[1].content).toBe('second prompt');
     expect(result.userMessages[1].turnNumber).toBe(2);
   });
+
+  it('labels a cache drop with a byte-identical prefix as a confirmed eviction', async () => {
+    const mainJsonl = path.join(tmpDir, 'main.jsonl');
+    // Stable prompt prefix; the second request only APPENDS a new turn, yet the
+    // provider reports far fewer cached tokens — a true provider-side eviction.
+    const sys = { role: 'user', parts: [{ type: 'text', content: 'SYS '.repeat(50) }] };
+    const earlier = { role: 'assistant', parts: [{ type: 'text', content: 'earlier turn answer' }] };
+    const appended = { role: 'assistant', parts: [{ type: 'text', content: 'a freshly appended turn' }] };
+    fs.writeFileSync(mainJsonl, [
+      JSON.stringify({ type: 'user_message', ts: '2026-01-01T00:00:00Z', attrs: { content: 'p' } }),
+      JSON.stringify({ type: 'turn_start', ts: '2026-01-01T00:00:01Z' }),
+      JSON.stringify({ type: 'llm_request', status: 'ok', ts: '2026-01-01T00:00:02Z',
+        attrs: { model: 'm1', inputTokens: 6000, outputTokens: 100, cachedTokens: 5000, inputMessages: [sys, earlier] } }),
+      JSON.stringify({ type: 'llm_request', status: 'ok', ts: '2026-01-01T00:00:04Z',
+        attrs: { model: 'm1', inputTokens: 6200, outputTokens: 100, cachedTokens: 1000, inputMessages: [sys, earlier, appended] } }),
+    ].join('\n'));
+
+    const result = await parseSessionDirectory(tmpDir, 'test-session');
+    expect(result.llmCalls).toHaveLength(2);
+    // Type stays provider_eviction; the detail confirms the prefix was unchanged.
+    expect(result.llmCalls[1].cacheBreakType).toBe('provider_eviction');
+    expect(JSON.parse(result.llmCalls[1].cacheBreakDetail)).toEqual({ kind: 'eviction' });
+    // Transient signatures must not leak out of the parser.
+    expect(result.llmCalls[0]._msgSig).toBeUndefined();
+  });
+
+  it('localizes a cache break to a changed message inside the prefix (prefix_change)', async () => {
+    const mainJsonl = path.join(tmpDir, 'main.jsonl');
+    // The cached prefix itself changed at index 1 (an earlier tool result was
+    // pruned/shortened) — a structural cause the cached-token drop alone can't
+    // localize. Input tokens barely move, so this is NOT compaction.
+    const sys = { role: 'user', parts: [{ type: 'text', content: 'SYS '.repeat(50) }] };
+    const toolLong = { role: 'tool', parts: [{ type: 'tool_call_response', response: 'X'.repeat(2000) }] };
+    const toolShort = { role: 'tool', parts: [{ type: 'tool_call_response', response: 'pruned' }] };
+    fs.writeFileSync(mainJsonl, [
+      JSON.stringify({ type: 'user_message', ts: '2026-01-01T00:00:00Z', attrs: { content: 'p' } }),
+      JSON.stringify({ type: 'turn_start', ts: '2026-01-01T00:00:01Z' }),
+      JSON.stringify({ type: 'llm_request', status: 'ok', ts: '2026-01-01T00:00:02Z',
+        attrs: { model: 'm1', inputTokens: 6000, outputTokens: 100, cachedTokens: 5000, inputMessages: [sys, toolLong] } }),
+      JSON.stringify({ type: 'llm_request', status: 'ok', ts: '2026-01-01T00:00:04Z',
+        attrs: { model: 'm1', inputTokens: 5800, outputTokens: 100, cachedTokens: 1000, inputMessages: [sys, toolShort] } }),
+    ].join('\n'));
+
+    const result = await parseSessionDirectory(tmpDir, 'test-session');
+    expect(result.llmCalls).toHaveLength(2);
+    expect(result.llmCalls[1].cacheBreakType).toBe('provider_eviction');
+    expect(JSON.parse(result.llmCalls[1].cacheBreakDetail)).toEqual({ kind: 'prefix_change', at: 1, how: 'lengthChange' });
+  });
+
+  it('leaves cache_break_detail null when the prefix differs at index 0 (delta-only logs)', async () => {
+    const mainJsonl = path.join(tmpDir, 'main.jsonl');
+    // Some logs record only the per-turn delta (not the full prefix), so the two
+    // arrays share no prefix. We must NOT invent a structural cause here.
+    const full = { role: 'user', parts: [{ type: 'text', content: 'FULL '.repeat(50) }] };
+    const delta = { role: 'tool', parts: [{ type: 'tool_call_response', response: 'Successfully wrote todo list' }] };
+    fs.writeFileSync(mainJsonl, [
+      JSON.stringify({ type: 'user_message', ts: '2026-01-01T00:00:00Z', attrs: { content: 'p' } }),
+      JSON.stringify({ type: 'turn_start', ts: '2026-01-01T00:00:01Z' }),
+      JSON.stringify({ type: 'llm_request', status: 'ok', ts: '2026-01-01T00:00:02Z',
+        attrs: { model: 'm1', inputTokens: 6000, outputTokens: 100, cachedTokens: 5000, inputMessages: [full] } }),
+      JSON.stringify({ type: 'llm_request', status: 'ok', ts: '2026-01-01T00:00:04Z',
+        attrs: { model: 'm1', inputTokens: 6200, outputTokens: 100, cachedTokens: 1000, inputMessages: [delta] } }),
+    ].join('\n'));
+
+    const result = await parseSessionDirectory(tmpDir, 'test-session');
+    expect(result.llmCalls[1].cacheBreakType).toBe('provider_eviction');
+    expect(result.llmCalls[1].cacheBreakDetail).toBeNull();
+  });
 });

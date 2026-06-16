@@ -282,12 +282,17 @@ const CACHE_BREAK_BADGES = {
   compaction:            { cls: 'badge-warning', icon: '\uD83D\uDD04', label: 'Compaction',        tip: 'Conversation trimmed to fit context window' },
   model_switch:          { cls: 'badge-info',    icon: '\uD83D\uDD00', label: 'Model Switch',      tip: 'Cache invalidated by model change' },
   subagent_boundary:     { cls: 'badge-info',    icon: '\uD83D\uDD17', label: 'Subagent',          tip: 'Switched to/from subagent' },
-  system_prompt_change:  { cls: 'badge-warning', icon: '\u2699\uFE0F', label: 'Sys Prompt',        tip: 'System prompt was rebuilt' },
-  tools_changed:         { cls: 'badge-warning', icon: '\uD83D\uDEE0', label: 'Tools Changed',     tip: 'Tool definitions changed between requests' },
+  system_prompt_change:  { cls: 'badge-warning', icon: '\u2699\uFE0F', label: 'Sys Prompt',        tip: 'System instructions changed — the cached prompt prefix diverged here' },
+  tools_changed:         { cls: 'badge-warning', icon: '\uD83D\uDEE0', label: 'Tools Changed',     tip: 'Tool definitions changed — the cached prompt prefix diverged here' },
   options_changed:       { cls: 'badge-info',    icon: '\u2699',       label: 'Options Changed',   tip: 'Request options changed (e.g. reasoning.effort, include)' },
   retry:                 { cls: 'badge-error',   icon: '\u21BB',       label: 'Retry',             tip: 'Cache lost after failed call was retried' },
   provider_eviction:     { cls: 'badge-muted',   icon: '\u26A0',       label: 'Possible Eviction', tip: 'No clear cause found — likely provider cache expiration (e.g. TTL)' }
 };
+
+// Idle gap (seconds) above which an otherwise-unexplained eviction is attributed
+// to the provider's cache TTL expiring while the session sat idle. Provider prompt
+// caches (e.g. OpenAI) typically drop a prefix a few minutes after its last use.
+const EVICTION_IDLE_THRESHOLD_S = 120;
 
 /**
  * Render the per-call cache table in the Cache tab.
@@ -333,10 +338,38 @@ export function renderCacheTable() {
     const badge = CACHE_BREAK_BADGES[c.cache_break_type];
     const gap = c.time_since_prev;
     const gapStr = gap != null ? (gap >= 60 ? Math.round(gap / 60) + 'm' : gap + 's') : '';
-    const tipExtra = gap != null ? ` (${gapStr} since prev call)` : '';
+    // For an unexplained eviction after a long idle gap, attribute it to the
+    // provider's cache TTL expiring \u2014 that's the understandable, evidence-backed
+    // cause (the prefix was fine; it simply aged out while the session sat idle).
+    const isIdleEviction = c.cache_break_type === 'provider_eviction'
+      && gap != null && gap >= EVICTION_IDLE_THRESHOLD_S;
+
+    // Content-diff verdict (when present) refines the generic eviction label: it
+    // tells us whether the cached prefix was truly unchanged (a real provider
+    // eviction) or whether a message inside the prefix changed (a structural
+    // break the token counts alone could not localize \u2014 not the appended content).
+    let detail = null;
+    if (c.cache_break_detail) { try { detail = JSON.parse(c.cache_break_detail); } catch { /* ignore */ } }
+
+    let cls = badge?.cls, icon = badge?.icon, label = badge?.label, tip = badge?.tip ?? '';
+    if (detail?.kind === 'prefix_change') {
+      cls = 'badge-warning'; icon = '\u270F'; label = 'Prefix Edited';
+      tip = `Message #${detail.at} inside the cached prefix changed (${detail.how === 'lengthChange' ? 'length' : 'content'}) \u2014 the cache broke here, not from appended content`;
+    } else if (detail?.kind === 'eviction') {
+      const evicted = delta < 0 ? formatCompact(-delta) : null;
+      cls = 'badge-muted'; icon = '\u26A0';
+      label = isIdleEviction ? 'Cache Expired' : 'Cache Evicted';
+      tip = `Cached prefix was byte-identical \u2014 provider dropped${evicted ? ` ${evicted}` : ''} cached tokens`
+        + (isIdleEviction ? ` after ${gapStr} idle (provider TTL)` : gap != null ? ` (${gapStr} gap, no structural change)` : ', no structural change');
+    } else if (isIdleEviction) {
+      label = 'Cache Expired';
+      tip = `Cache likely expired after ${gapStr} idle \u2014 provider TTL, no structural change`;
+    } else {
+      tip = `${tip}${gap != null ? ` (${gapStr} since prev call)` : ''}`;
+    }
     const gapSuffix = gap != null && c.cache_break_type === 'provider_eviction' ? ` <span class="cache-gap">${gapStr}</span>` : '';
     const badgeHtml = badge
-      ? `<span class="badge ${badge.cls}" title="${badge.tip}${tipExtra}">${badge.icon} ${badge.label}${gapSuffix}</span>`
+      ? `<span class="badge ${cls}" title="${escapeHtml(tip)}">${icon} ${label}${gapSuffix}</span>`
       : `<span class="badge badge-error" title="Significant cache drop">\u26A0 break</span>`;
     return `<tr>
       <td class="numeric">${c.turn_number || '—'}</td>

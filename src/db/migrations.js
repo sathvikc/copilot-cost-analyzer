@@ -42,6 +42,15 @@ const MIGRATIONS = [
       }
     },
   },
+  {
+    version: 2,
+    description: 'Add cache_break_detail to llm_calls (content-diff verdict for breaks)',
+    run: (db) => {
+      if (!tableColumns(db, 'llm_calls').includes('cache_break_detail')) {
+        db.run('ALTER TABLE llm_calls ADD COLUMN cache_break_detail TEXT;');
+      }
+    },
+  },
 ];
 
 module.exports = { MIGRATIONS };
