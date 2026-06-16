@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 with the following constraint: **all versions are 0.x.x** (pre-1.0) while the
 extension is in active development.
 
+## [0.9.0] - 2026-06-16
+
+### Added
+- **Clearer cache-break reasons in the Cache tab** — when the provider drops a cached prefix that was actually unchanged (a true eviction, or a TTL expiry after an idle gap), the call is now labeled **Cache Evicted** / **Cache Expired** and reports how many cached tokens were lost, instead of vaguely blaming the most recent messages. When a message *inside* the cached prefix really did change, it's pinpointed as **Prefix Edited** at the exact message. The verdict comes from a content-level diff of the request history, so the stated cause is evidence-backed rather than inferred from token counts alone.
+
+### Changed
+- **Sharper tooltips for prompt-prefix breaks** — the `Sys Prompt` and `Tools Changed` badges now explain that the cached prefix diverged at that point, and idle-gap evictions are attributed to provider cache TTL.
+
 ## [0.8.0] - 2026-06-14
 
 ### Added

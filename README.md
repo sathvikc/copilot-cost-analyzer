@@ -51,6 +51,11 @@ Each cache break is automatically classified with a cause:
 
 Classification uses a priority hierarchy: `compaction > model_switch > subagent_boundary > system_prompt_change > tools_changed > options_changed > retry > provider_eviction`
 
+When the request history is logged in cumulative form, a `provider_eviction` is refined further by a content-level diff of the cached prompt prefix:
+
+- **Cache Evicted** / **Cache Expired** — the cached prefix was byte-identical, so the provider dropped it on its own (a true eviction, or a TTL expiry after an idle gap). The badge reports how many cached tokens were lost rather than blaming the most recent messages.
+- **Prefix Edited** — a message *inside* the cached prefix actually changed; the break is pinpointed to that exact message, not the appended turn.
+
 ### Persistent Storage
 - SQLite database (`sql.js`) survives VS Code log cleanup
 - Incremental sync — only re-parses changed sessions
