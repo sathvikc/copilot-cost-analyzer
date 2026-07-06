@@ -62,6 +62,14 @@ export function renderSessionDetail() {
       timeRange.textContent = start + (session.end_time && session.end_time !== session.start_time ? ' \u2192 ' + end : '');
     }
 
+    // Premium requests (Copilot CLI only) \u2014 the actual UBB billing unit.
+    const premiumPill = document.getElementById('detail-premium-pill');
+    if (premiumPill) {
+      const hasPremium = session.total_premium_requests != null;
+      premiumPill.classList.toggle('hidden', !hasPremium);
+      if (hasPremium) setText('detail-premium-count', String(session.total_premium_requests));
+    }
+
     // Copy handlers (bind once)
     bindCopy('detail-session-id', () => store.sessionDetail?.session_id, 'Session ID');
     bindCopy('detail-ws', () => store.sessionDetail?.workspace_path, 'Workspace');
@@ -72,18 +80,40 @@ export function renderSessionDetail() {
       if (session.source_path) {
         openBtn.classList.remove('hidden');
         openBtn.onclick = () => {
-          const mainJsonl = session.source_path + '/main.jsonl';
-          if (window.__rpc) window.__rpc.call('openDebugLog', { filePath: mainJsonl }).catch(() => {});
+          // debug-logs source_path is a directory; chatSessions/CLI point at the file itself.
+          const logFile = session.source_type === 'debug-logs'
+            ? session.source_path + '/main.jsonl'
+            : session.source_path;
+          if (window.__rpc) window.__rpc.call('openDebugLog', { filePath: logFile }).catch(() => {});
         };
       } else {
         openBtn.classList.add('hidden');
       }
     }
 
-    // Reveal chat session button
+    // AI review prompt: exports the session as a compact coach pack and copies
+    // it to the clipboard, ready to paste into any agent.
+    const aiReviewBtn = document.getElementById('btn-ai-review');
+    if (aiReviewBtn) {
+      aiReviewBtn.onclick = async () => {
+        if (!window.__rpc) return;
+        try {
+          const res = await window.__rpc.call('exportSession', {
+            sessionId: session.session_id, format: 'ai-review'
+          });
+          if (res?.data) {
+            copyText(res.data, 'AI review prompt');
+            aiReviewBtn.textContent = '✓ Copied';
+            setTimeout(() => { aiReviewBtn.textContent = '🧠 Copy AI Review Prompt'; }, 2000);
+          }
+        } catch { /* rpc unavailable */ }
+      };
+    }
+
+    // Reveal chat session button (VS Code chat only — CLI sessions have no panel to reveal)
     const revealBtn = document.getElementById('btn-reveal-chat');
     if (revealBtn) {
-      revealBtn.classList.remove('hidden');
+      revealBtn.classList.toggle('hidden', session.source_type === 'copilot-cli');
       revealBtn.onclick = () => {
         if (window.__rpc) window.__rpc.call('revealChatSession', { sessionId: session.session_id }).catch(() => {});
       };
@@ -94,9 +124,12 @@ export function renderSessionDetail() {
     // \u2014 show "\u2014", never "0" or a fabricated estimate. Output is shown with "~" when
     // it was estimated from the response text (input === 0 but output > 0).
     const isLimited = session.source_type === 'chatSessions';
+    // A CLI session without a session.shutdown event (crash/kill) has no input
+    // totals \u2014 render "\u2014" rather than a misleading 0.
+    const isCliNoTotals = session.source_type === 'copilot-cli' && !session.total_input_tokens;
     const outputEstimated = isLimited && !session.total_input_tokens && session.total_output_tokens > 0;
     store.cardCalls = session.total_llm_calls;
-    store.cardInput = (isLimited && !session.total_input_tokens) ? '\u2014' : formatNumber(session.total_input_tokens);
+    store.cardInput = ((isLimited || isCliNoTotals) && !session.total_input_tokens) ? '\u2014' : formatNumber(session.total_input_tokens);
     store.cardOutput = outputEstimated
       ? '~' + formatNumber(session.total_output_tokens)
       : ((isLimited && !session.total_output_tokens) ? '\u2014' : formatNumber(session.total_output_tokens));
@@ -184,7 +217,7 @@ export function renderSessionModelBreakdown() {
   // response text). Input, cache, cost and AIC need debug logs and are shown as "—".
   // No caption here — the "~" on the output value already signals "estimated" and
   // the limited-data banner at the top of the view carries the full explanation.
-  const limited = session?.source_type === 'chatSessions';
+  const limited = session?.source_type === 'chatSessions' || session?.source_type === 'copilot-cli';
   container.innerHTML = list.map(m => {
     m.vendor = m.model.toLowerCase().includes('claude') ? 'Anthropic' : m.model.toLowerCase().includes('gpt') ? 'OpenAI' : '';
     m.aic = m.aic || 0;

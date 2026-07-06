@@ -51,6 +51,24 @@ const MIGRATIONS = [
       }
     },
   },
+  {
+    version: 3,
+    description: 'Add interruption_type to user_messages (edited | steered | stopped | interrupted)',
+    run: (db) => {
+      if (!tableColumns(db, 'user_messages').includes('interruption_type')) {
+        db.run('ALTER TABLE user_messages ADD COLUMN interruption_type TEXT;');
+      }
+    },
+  },
+  {
+    version: 4,
+    description: 'Add total_premium_requests to sessions (Copilot CLI ground truth for UBB)',
+    run: (db) => {
+      if (!tableColumns(db, 'sessions').includes('total_premium_requests')) {
+        db.run('ALTER TABLE sessions ADD COLUMN total_premium_requests INTEGER;');
+      }
+    },
+  },
 ];
 
 module.exports = { MIGRATIONS };

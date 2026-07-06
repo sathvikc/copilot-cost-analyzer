@@ -16,6 +16,26 @@ export function isEstimatedSession() {
   return store.sessionDetail?.source_type === 'chatSessions';
 }
 
+/** Whether the currently-open session came from the Copilot CLI. */
+export function isCliSession() {
+  return store.sessionDetail?.source_type === 'copilot-cli';
+}
+
+/**
+ * Muted one-liner for CLI sessions on tabs that need per-call data the CLI
+ * doesn't log (cache split, retries). Session-level totals ARE real for CLI —
+ * only the per-call breakdown is missing.
+ * @param {string} feature - Human label, e.g. "Cache analysis".
+ * @returns {string} HTML
+ */
+export function cliLimitedNotice(feature) {
+  return `
+    <p class="debug-unavailable-note" role="note">
+      ${escapeHtml(feature)} isn't available for Copilot CLI sessions — the CLI logs
+      session-level totals (shown in the summary cards) but no per-call breakdown.
+    </p>`;
+}
+
 /**
  * Muted one-liner shown on the Cache / Retry tabs for estimated (chatSessions)
  * sessions, which carry no per-call cache/retry data.
@@ -101,6 +121,10 @@ export function renderRetryReport() {
     container.innerHTML = debugRequiredNotice('Retry & failover analysis');
     return;
   }
+  if (isCliSession()) {
+    container.innerHTML = cliLimitedNotice('Retry & failover analysis');
+    return;
+  }
   const calls = store.llmCalls || [];
   const retries = calls.filter(c => c.debug_name && c.debug_name.includes('retry'));
   if (retries.length === 0) {
@@ -154,8 +178,13 @@ export function renderCacheSparkline() {
   // an empty chart + table that would read as "zero cache breaks".
   const notice = document.getElementById('cache-debug-notice');
   const content = document.getElementById('cache-content');
-  if (isEstimatedSession()) {
-    if (notice) { notice.innerHTML = debugRequiredNotice('Cache analysis'); notice.classList.remove('hidden'); }
+  if (isEstimatedSession() || isCliSession()) {
+    if (notice) {
+      notice.innerHTML = isCliSession()
+        ? cliLimitedNotice('Per-call cache analysis')
+        : debugRequiredNotice('Cache analysis');
+      notice.classList.remove('hidden');
+    }
     content?.classList.add('hidden');
     return;
   }
@@ -286,6 +315,7 @@ const CACHE_BREAK_BADGES = {
   tools_changed:         { cls: 'badge-warning', icon: '\uD83D\uDEE0', label: 'Tools Changed',     tip: 'Tool definitions changed — the cached prompt prefix diverged here' },
   options_changed:       { cls: 'badge-info',    icon: '\u2699',       label: 'Options Changed',   tip: 'Request options changed (e.g. reasoning.effort, include)' },
   retry:                 { cls: 'badge-error',   icon: '\u21BB',       label: 'Retry',             tip: 'Cache lost after failed call was retried' },
+  user_interruption:     { cls: 'badge-warning', icon: '\u23F9',       label: 'User Interruption', tip: 'The previous turn was stopped/steered/edited — rewriting history broke the cached prefix' },
   provider_eviction:     { cls: 'badge-muted',   icon: '\u26A0',       label: 'Possible Eviction', tip: 'No clear cause found — likely provider cache expiration (e.g. TTL)' }
 };
 
@@ -352,7 +382,11 @@ export function renderCacheTable() {
     if (c.cache_break_detail) { try { detail = JSON.parse(c.cache_break_detail); } catch { /* ignore */ } }
 
     let cls = badge?.cls, icon = badge?.icon, label = badge?.label, tip = badge?.tip ?? '';
-    if (detail?.kind === 'prefix_change') {
+    if (detail?.kind === 'user_interruption') {
+      const HOW_LABELS = { steered: 'steered mid-run', stopped: 'stopped', interrupted: 'interrupted', edited: 'edited & resent' };
+      const how = HOW_LABELS[detail.how] || 'interrupted';
+      tip = `Turn ${detail.interruptedTurn} was ${how} — its partial response was rewritten out of the history, breaking the cached prefix here`;
+    } else if (detail?.kind === 'prefix_change') {
       cls = 'badge-warning'; icon = '\u270F'; label = 'Prefix Edited';
       tip = `Message #${detail.at} inside the cached prefix changed (${detail.how === 'lengthChange' ? 'length' : 'content'}) \u2014 the cache broke here, not from appended content`;
     } else if (detail?.kind === 'eviction') {

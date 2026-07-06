@@ -66,6 +66,25 @@ function getWorkspaceStoragePaths() {
 }
 
 /**
+ * Get the Copilot CLI session-state directories that exist on this machine.
+ * The CLI keeps all its state under one config dir (docs: "Copilot CLI
+ * configuration directory"): `$COPILOT_HOME` when set, else `~/.copilot`.
+ * Sessions live in `<configDir>/session-state/<session-id>/events.jsonl`.
+ * @returns {string[]}
+ */
+function getCopilotCliSessionPaths() {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  const candidates = [];
+  if (process.env.COPILOT_HOME) {
+    candidates.push(path.join(process.env.COPILOT_HOME, 'session-state'));
+  }
+  if (home) {
+    candidates.push(path.join(home, '.copilot', 'session-state'));
+  }
+  return [...new Set(candidates)].filter(p => fs.existsSync(p));
+}
+
+/**
  * Find a file relative to a workspace hash directory across all VS Code installations.
  * @param {string} workspaceHash
  * @param {...string} relativeSegments - Path segments relative to the workspace dir
@@ -80,4 +99,4 @@ function findWorkspaceFile(workspaceHash, ...relativeSegments) {
   return null;
 }
 
-module.exports = { getWorkspaceStoragePaths, findWorkspaceFile, setGlobalStorageBase };
+module.exports = { getWorkspaceStoragePaths, getCopilotCliSessionPaths, findWorkspaceFile, setGlobalStorageBase };

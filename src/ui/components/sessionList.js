@@ -6,6 +6,51 @@ import { store } from '../store.js';
 import { escapeHtml, relativeTime, shortTitle, copyText } from '../helpers.js';
 import { formatNumberWithCommas, getSessionAicClass } from '../formatters.js';
 
+/** Display labels for session channels (see sessionApi.deriveChannel). */
+const CHANNEL_LABELS = {
+  'vscode':          '🖥 VS Code',
+  'vscode-insiders': '🟢 VS Code Insiders',
+  'cli':             '⌘ Copilot CLI',
+  'remote':          '📦 Remote / Dev Container'
+};
+
+/**
+ * Rebuild the Sources multi-select from the channels actually present. Hidden
+ * entirely when only one channel exists (nothing to filter). Checked state
+ * follows store.filterSources ('' = all checked); checkbox changes are handled
+ * in events.js.
+ */
+function rebuildSourceFilter() {
+  const dropdown = document.getElementById('filter-source');
+  const panel = document.getElementById('filter-source-panel');
+  if (!dropdown || !panel) return;
+
+  const channels = [...new Set(store.sessions.map(s => s.channel || 'vscode'))]
+    .sort((a, b) => Object.keys(CHANNEL_LABELS).indexOf(a) - Object.keys(CHANNEL_LABELS).indexOf(b));
+  dropdown.classList.toggle('hidden', channels.length <= 1);
+  if (channels.length <= 1) return;
+
+  const selected = store.filterSources ? store.filterSources.split(',') : channels;
+  panel.innerHTML = '';
+
+  const selectAll = document.createElement('label');
+  selectAll.className = 'filter-select-all';
+  selectAll.innerHTML = `<input type="checkbox" class="select-all" ${selected.length === channels.length ? 'checked' : ''} aria-label="Select all sources"> <strong>Select All</strong>`;
+  panel.appendChild(selectAll);
+  const divider = document.createElement('div');
+  divider.className = 'filter-divider';
+  panel.appendChild(divider);
+
+  for (const ch of channels) {
+    const label = document.createElement('label');
+    label.innerHTML = `<input type="checkbox" value="${ch}" ${selected.includes(ch) ? 'checked' : ''} aria-label="Show ${escapeHtml(CHANNEL_LABELS[ch] || ch)} sessions"> ${CHANNEL_LABELS[ch] || escapeHtml(ch)}`;
+    panel.appendChild(label);
+  }
+
+  const countEl = dropdown.querySelector('.filter-count');
+  if (countEl) countEl.textContent = selected.length === channels.length ? 'All' : `${selected.length}/${channels.length}`;
+}
+
 /**
  * Render the session list in the sidebar.
  * @param {Array} filteredSessions
@@ -32,6 +77,8 @@ export function renderSessionList(filteredSessions, opts = {}) {
     if ([...wsSelect.options].some(o => o.value === currentValue)) wsSelect.value = currentValue;
   }
 
+  rebuildSourceFilter();
+
   for (const s of filteredSessions) {
     const li = document.createElement('li');
     li.className = 'session-item' + (s.session_id === store.selectedSessionId ? ' active' : '');
@@ -50,6 +97,7 @@ export function renderSessionList(filteredSessions, opts = {}) {
     if (s.retry_count > 0) badges.push('<span class="badge badge-warning" role="status" aria-label="' + s.retry_count + ' retries" title="' + s.retry_count + ' retries">\u21BB ' + s.retry_count + '</span>');
     if (s.has_model_switch) badges.push('<span class="badge badge-warning" role="status" aria-label="Model switch" title="Model switch">\u21C4</span>');
     if (s.has_subagent) badges.push('<span class="badge badge-info" role="status" aria-label="Sub-agent" title="Sub-agent">\u2139 sub</span>');
+    if (s.source_type === 'copilot-cli') badges.push('<span class="badge badge-info" role="status" aria-label="Copilot CLI session" title="Copilot CLI session">\u2318 CLI</span>');
 
     const aicNum = s.computed_aic > 0 ? formatNumberWithCommas((s.computed_aic / 1e9).toFixed(2)) : '';
     const approxPrefix = s.is_aic_approx ? '~' : '';

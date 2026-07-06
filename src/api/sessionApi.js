@@ -115,6 +115,16 @@ function buildTurns(llmCalls, toolCalls, userMessages, session) {
       call.output_estimated = (call.input_tokens || 0) === 0 && (call.output_tokens || 0) > 0;
     }
   }
+  // Copilot CLI calls carry REAL per-call output tokens but no per-call
+  // input/cache split (only session totals exist) — render "—" for those,
+  // without the "~" estimate marker.
+  const isCliSession = session && session.source_type === 'copilot-cli';
+  if (isCliSession) {
+    for (const call of llmCalls) {
+      call.is_limited_source = true;
+      call.output_estimated = false;
+    }
+  }
 
   // --- Estimated AIC distribution ---
   // When session has no actual AIC data, distribute the session-level estimated AIC
@@ -156,8 +166,13 @@ function buildTurns(llmCalls, toolCalls, userMessages, session) {
     // Cold start = no cache benefit on any call in this turn (cached_tokens === 0 or null)
     const isColdStart = data.llmCalls.length > 0 && data.llmCalls.every(c => c.cached_tokens === null || c.cached_tokens === 0);
 
-    // Canceled = user edited/resent this message (detected from chatSessions cross-reference)
-    const isCanceled = data.userMessages.some(m => m.is_canceled === 1);
+    // Interruption classification from the chatSessions cross-reference:
+    // 'edited' (edit & resend removed the original), 'steered' (interrupted by
+    // the user's next mid-run message), 'stopped' (Stop pressed), 'interrupted'
+    // (run ended without a recorded result). isCanceled stays as the umbrella
+    // boolean for existing consumers.
+    const interruptionType = data.userMessages.find(m => m.interruption_type)?.interruption_type || null;
+    const isCanceled = interruptionType !== null || data.userMessages.some(m => m.is_canceled === 1);
 
     // Build unified chronological events within this turn
     const events = [];
@@ -206,6 +221,7 @@ function buildTurns(llmCalls, toolCalls, userMessages, session) {
       turnNumber: turnNum,
       isColdStart,
       isCanceled,
+      interruptionType,
       events,
       userMessages: data.userMessages.map(m => ({
         content: m.content || '',
@@ -224,6 +240,21 @@ function buildTurns(llmCalls, toolCalls, userMessages, session) {
 }
 
 /**
+ * Which app/channel produced a session, derived from source_type + source_path.
+ * Not stored in the DB — the path already carries the answer and deriving keeps
+ * old rows correct without a re-sync.
+ * @param {{source_type?: string, source_path?: string}} row
+ * @returns {'cli'|'vscode-insiders'|'remote'|'vscode'}
+ */
+function deriveChannel(row) {
+  if (row.source_type === 'copilot-cli') return 'cli';
+  const p = row.source_path || '';
+  if (p.includes('Code - Insiders')) return 'vscode-insiders';
+  if (p.includes('.vscode-server') || p.includes('.vscode-remote')) return 'remote';
+  return 'vscode';
+}
+
+/**
  * Get list of all sessions.
  */
 function getSessions(db) {
@@ -239,7 +270,7 @@ function getSessions(db) {
         COALESCE((SELECT COUNT(*) FROM llm_calls lc WHERE lc.session_id = s.session_id AND lc.debug_name LIKE '%retry%'), 0) AS retry_count
       FROM sessions s
       ORDER BY s.start_time DESC
-    `);
+    `).map(row => ({ ...row, channel: deriveChannel(row) }));
   } catch (err) {
     console.error('[sessionApi] getSessions failed:', err.message);
     return [];
@@ -608,6 +639,10 @@ function exportSession(db, sessionId, options = {}) {
   const shortId = (sessionId || 'unknown').slice(0, 8);
 
   switch (format) {
+    case 'ai-review': {
+      const data = buildAiReviewPack(db, sessionId, detail);
+      return { data, mimeType: 'text/markdown', filename: `session-${shortId}-ai-review.md` };
+    }
     case 'csv': {
       // CSV-escape: wrap fields containing comma/quote/newline in double quotes
       const esc = (v) => {
@@ -647,6 +682,113 @@ function exportSession(db, sessionId, options = {}) {
       return { data: JSON.stringify(payload, null, 2), mimeType: 'application/json', filename: `session-${shortId}.json` };
     }
   }
+}
+
+/**
+ * Build the "AI review pack" — a self-contained, token-frugal markdown prompt
+ * the user can paste into any AI agent to get coaching on their usage habits.
+ *
+ * Design goals:
+ *   - The reviewing agent needs NO access to raw logs (those are huge and
+ *     noisy); every relevant fact is pre-digested here from the DB.
+ *   - User messages are verbatim (they ARE the habits under review); assistant
+ *     responses are trimmed to a short summary to keep the pack small.
+ *   - Numbers are measured, with "~" marking estimates — same policy as the UI.
+ *
+ * @param {Object} db
+ * @param {string} sessionId
+ * @param {Object} detail - result of getSessionDetail (session + turns)
+ * @returns {string} markdown
+ */
+function buildAiReviewPack(db, sessionId, detail) {
+  const s = detail.session || {};
+  const breaks = getCacheBreakSummary(db, sessionId);
+  const responses = getAgentResponses(db, sessionId);
+  const respByTurn = new Map();
+  for (const r of responses) {
+    if (!r.response_text) continue;
+    respByTurn.set(r.turn_number, (respByTurn.get(r.turn_number) || '') + r.response_text + ' ');
+  }
+
+  const fmtTokens = (n) => n == null ? '—' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+  const date = s.start_time ? new Date(s.start_time * 1000).toISOString().slice(0, 16).replace('T', ' ') : '—';
+  // Wall-clock span. Sessions can be resumed days later, so a span past 8h is
+  // reported as "resumed over N days" instead of a misleading giant duration.
+  const spanSec = s.start_time && s.end_time ? s.end_time - s.start_time : null;
+  const duration = spanSec == null ? null
+    : spanSec > 8 * 3600 ? `resumed over ${Math.max(2, Math.ceil(spanSec / 86400))} days`
+    : spanSec >= 3600 ? `${Math.floor(spanSec / 3600)}h ${Math.round((spanSec % 3600) / 60)}m`
+    : `${Math.round(spanSec / 60)} min`;
+  const models = (() => { try { return JSON.parse(s.models_used_json || '[]').join(', '); } catch { return '—'; } })();
+  const cacheHit = s.cache_hit_pct != null ? s.cache_hit_pct.toFixed(1) + '%' : '—';
+  const approx = s.is_aic_approx ? '~' : '';
+  const aic = s.computed_aic > 0 ? approx + (s.computed_aic / 1e9).toFixed(2) : '—';
+  const cost = s.computed_cost > 0 ? approx + '$' + s.computed_cost.toFixed(2) : '—';
+  const source = s.source_type === 'copilot-cli' ? 'Copilot CLI'
+    : (s.source_path || '').includes('Code - Insiders') ? 'VS Code Insiders' : 'VS Code';
+
+  const lines = [
+    '# Copilot session review request',
+    '',
+    'You are reviewing ONE GitHub Copilot session to coach me on cost-efficient AI usage.',
+    'This pack was generated locally by the Copilot Cost Analyzer extension from measured',
+    'session logs — every number is real unless prefixed with `~` (estimated). Do NOT ask',
+    'for raw logs; everything relevant is already digested below.',
+    '',
+    'Please:',
+    '1. Identify habits in this session that wasted tokens / AI credits (cache breaks,',
+    '   stop-and-resend instead of steering, edit-resend loops, model switching mid-task,',
+    '   retries, very large tool outputs, idle gaps that let the prompt cache expire).',
+    '2. Cite the specific turns below as evidence.',
+    '3. Suggest 2–4 concrete habit changes, ranked by likely credit savings.',
+    '4. Also note what I did well, so I keep doing it.',
+    '',
+    '## Glossary (how to read the data)',
+    '- **cache hit %** — share of input tokens served from the prompt cache (cheap). Breaks reset it.',
+    '- **steered** — I sent a follow-up while the agent was running (redirect; keeps most of the cache).',
+    '- **stopped / interrupted** — I killed the run; the partial turn gets rewritten out of history, usually breaking the cache.',
+    '- **edited** — I edited an already-sent message; everything after it is discarded and re-run.',
+    '- **AIC** — AI credits (the billing unit; 1 AIC = $0.01).',
+    '',
+    '## Session facts',
+    `- Source: ${source} | Date: ${date}${duration != null ? ` | Duration: ${duration}` : ''}`,
+    `- Workspace: ${s.workspace_path || '—'}`,
+    `- Models: ${models}`,
+    `- LLM calls: ${s.total_llm_calls || 0} across ${detail.turns.length} turns${s.has_subagent ? ' (used sub-agents)' : ''}`,
+    `- Tokens: input ${fmtTokens(s.total_input_tokens)} (cache hit ${cacheHit}), output ${fmtTokens(s.total_output_tokens)}`,
+    `- Cost: ${cost} (${aic} AIC)${s.total_premium_requests != null ? ` | Billed premium requests: ${s.total_premium_requests}` : ''}`,
+  ];
+
+  if (breaks.total > 0) {
+    const byType = Object.entries(breaks.byType).map(([t, n]) => `${n}× ${t}`).join(', ');
+    lines.push(`- Cache breaks: ${breaks.total} (${byType})`);
+  }
+  const retries = (detail.llmCalls || []).filter(c => c.debug_name && c.debug_name.includes('retry')).length;
+  if (retries > 0) lines.push(`- Retried calls: ${retries}`);
+  const topTools = (detail.toolLeaderboard || []).slice(0, 5)
+    .map(t => `${t.tool_name} (${t.calls}×, ${fmtTokens(t.total_result_size)} chars)`);
+  if (topTools.length) lines.push(`- Top tools by output size: ${topTools.join(', ')}`);
+
+  lines.push('', '## Turn-by-turn');
+  const breaksByTurn = new Map();
+  for (const b of breaks.breaks) {
+    breaksByTurn.set(b.turn_number, (breaksByTurn.get(b.turn_number) || []).concat(b.cache_break_type));
+  }
+  for (const turn of detail.turns) {
+    const msg = (turn.userMessages.find(m => m.content)?.content || '').trim();
+    const endState = turn.interruptionType || 'completed';
+    const turnBreaks = breaksByTurn.get(turn.turnNumber);
+    const resp = (respByTurn.get(turn.turnNumber) || '').trim().replace(/\s+/g, ' ');
+    lines.push('', `### Turn ${turn.turnNumber} — ${endState}${turn.aicBadge ? ` — ${turn.aicBadge} AIC` : ''}`);
+    if (msg) lines.push(`**Me:** ${msg}`);
+    const facts = [`${turn.llmCalls.length} LLM calls`, `${turn.toolCalls.length} tool calls`];
+    if (turnBreaks) facts.push(`cache break: ${turnBreaks.join(', ')}`);
+    if (turn.isColdStart && turn.turnNumber > 1) facts.push('cold start (no cache)');
+    lines.push(`*${facts.join(' · ')}*`);
+    if (resp) lines.push(`**Agent (summary):** ${resp.slice(0, 300)}${resp.length > 300 ? '…' : ''}`);
+  }
+
+  return lines.join('\n') + '\n';
 }
 
 /**

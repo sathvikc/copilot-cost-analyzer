@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   has_model_switch INTEGER DEFAULT 0,
   has_subagent INTEGER DEFAULT 0,
   source_path TEXT,
-  source_type TEXT DEFAULT 'debug-logs', -- 'debug-logs' | 'chatSessions' (estimated fallback)
+  source_type TEXT DEFAULT 'debug-logs', -- 'debug-logs' | 'chatSessions' (estimated fallback) | 'copilot-cli'
+  total_premium_requests INTEGER, -- Copilot CLI only: billed premium requests (UBB ground truth)
   first_prompt TEXT,
   copilot_version TEXT,
   vscode_version TEXT,
@@ -42,7 +43,8 @@ CREATE TABLE IF NOT EXISTS user_messages (
   turn_number INTEGER DEFAULT 0,
   content TEXT,
   timestamp INTEGER,
-  is_canceled INTEGER DEFAULT 0,
+  is_canceled INTEGER DEFAULT 0, -- 1 when interruption_type is set (kept for compat)
+  interruption_type TEXT, -- 'edited' | 'steered' | 'stopped' | 'interrupted' | NULL (completed)
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_user_messages_session ON user_messages(session_id);

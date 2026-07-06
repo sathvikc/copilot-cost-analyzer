@@ -64,6 +64,8 @@ function fmtRange(preset, start, end) {
 export function computeFilteredSessions() {
   const search = store.filterSearch.toLowerCase();
   const workspace = store.filterWorkspace;
+  // '' = all sources; otherwise a comma-joined set of channels to keep.
+  const sources = store.filterSources ? store.filterSources.split(',') : null;
   let range;
   if (store.timePreset === 'custom') {
     range = {
@@ -79,9 +81,10 @@ export function computeFilteredSessions() {
       (s.title || '').toLowerCase().includes(search) ||
       (s.workspace_path || '').toLowerCase().includes(search);
     const matchWs = !workspace || s.workspace_path === workspace;
+    const matchSource = !sources || sources.includes(s.channel || 'vscode');
     const matchFrom = !range.from || (s.start_time && s.start_time >= range.from);
     const matchTo = !range.to || (s.start_time && s.start_time <= range.to);
-    return matchSearch && matchWs && matchFrom && matchTo;
+    return matchSearch && matchWs && matchSource && matchFrom && matchTo;
   });
 }
 

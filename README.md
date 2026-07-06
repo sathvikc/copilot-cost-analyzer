@@ -4,7 +4,7 @@
   <img src="assets/icons/icon.png" width="128" alt="Copilot Cost Analyzer Logo">
 </p>
 
-A VS Code extension that visualizes **token costs**, **cache behavior**, and **tool call impact** for GitHub Copilot Chat sessions.
+A VS Code extension that visualizes **token costs**, **cache behavior**, and **tool call impact** for GitHub Copilot Chat **and Copilot CLI** sessions.
 
 > **Data-first analytics.**
 >
@@ -47,14 +47,40 @@ Each cache break is automatically classified with a cause:
 | 🛠 Tools Changed | `tools_changed` | Tool definitions changed between requests |
 | ⚙ Options Changed | `options_changed` | Request options changed (e.g. `reasoning.effort`, `include`) |
 | ↻ Retry | `retry` | Cache lost after a failed call was retried |
+| ⏹ User Interruption | `user_interruption` | The previous turn was stopped/steered/edited — rewriting history broke the cached prefix |
 | ⚠ Possible Eviction | `provider_eviction` | No identifiable cause — likely provider cache TTL expiration |
 
-Classification uses a priority hierarchy: `compaction > model_switch > subagent_boundary > system_prompt_change > tools_changed > options_changed > retry > provider_eviction`
+Classification uses a priority hierarchy: `model_switch > subagent_boundary > system_prompt_change > tools_changed > options_changed > compaction > retry > provider_eviction`, and an unexplained eviction is reclassified to `user_interruption` when the previous turn was interrupted (unless a content diff proves the cached prefix was byte-identical).
 
 When the request history is logged in cumulative form, a `provider_eviction` is refined further by a content-level diff of the cached prompt prefix:
 
 - **Cache Evicted** / **Cache Expired** — the cached prefix was byte-identical, so the provider dropped it on its own (a true eviction, or a TTL expiry after an idle gap). The badge reports how many cached tokens were lost rather than blaming the most recent messages.
 - **Prefix Edited** — a message *inside* the cached prefix actually changed; the break is pinpointed to that exact message, not the appended turn.
+
+### Interruption Detection
+
+Each turn is classified by how it ended, by cross-referencing the debug log
+against the canonical chat history (see `docs/log-format-research.md` for the
+verified signatures):
+
+| Badge | Type | Meaning |
+|-------|------|---------|
+| ✏ edited & resent | `edited` | You edited a sent message — the original run was discarded (struck through) |
+| ⚡ steered | `steered` | You sent your next message while this turn was running — the agent was redirected mid-run |
+| ⏹ stopped | `stopped` | You pressed Stop during this turn |
+| ⚠ interrupted | `interrupted` | The run ended without a recorded result (Stop in a non-graceful state, or the window closed) |
+
+Interruptions also feed the Cache tab: a cache break right after an interrupted
+turn is labeled `user_interruption` instead of being mis-blamed on the provider.
+
+### Copilot CLI Sessions
+
+Sessions from the **Copilot CLI** (`~/.copilot/session-state/`, or
+`$COPILOT_HOME/session-state` when set) are discovered automatically and shown
+with a `⌘ CLI` badge. The CLI's `session.shutdown` event provides ground-truth
+totals — **billed premium requests** (shown as a header pill), nano-AIU, and
+input / cache-read / cache-write / output token counts — so CLI sessions get
+real cost data even though the CLI logs no per-call token breakdown.
 
 ### Persistent Storage
 - SQLite database (`sql.js`) survives VS Code log cleanup
@@ -99,7 +125,8 @@ When the request history is logged in cumulative form, a `provider_eviction` is 
 
 ## Data Sources
 
-The extension reads from Copilot's **debug log files** stored in VS Code's workspace storage:
+The extension reads three complementary stores (details and verified signatures
+in [`docs/log-format-research.md`](docs/log-format-research.md)):
 
 ```
 workspaceStorage/<hash>/GitHub.copilot-chat/
@@ -111,6 +138,14 @@ workspaceStorage/<hash>/GitHub.copilot-chat/
 │   ├── tools_0.json            ← Tool catalog snapshots (sidecar)
 │   └── tools_1.json
 └── transcripts/<session-id>.jsonl  ← Conversation transcripts
+
+workspaceStorage/<hash>/chatSessions/<session-id>.jsonl
+    ← Always-written canonical chat history (fallback source; also the
+      cross-reference used for edited/steered/stopped detection)
+
+~/.copilot/session-state/<session-id>/events.jsonl   ($COPILOT_HOME overrides ~/.copilot)
+    ← Copilot CLI sessions: event stream + ground-truth session totals
+      (premium requests, nano-AIU, token details) from session.shutdown
 ```
 
 ### What we parse from `main.jsonl`
@@ -281,7 +316,7 @@ Copilot debug logs  (VS Code workspaceStorage on disk)
 | Database | **sql.js** (pure JS SQLite, 10 tables) |
 | Charts | Hand-rolled `<canvas>` sparklines |
 | RPC | `postMessage`-based bridge (no HTTP server) |
-| Tests | **Vitest** (159 tests across 15 test files) |
+| Tests | **Vitest** (183 tests across 18 test files) |
 
 ---
 
@@ -330,7 +365,7 @@ Scopes: `parser`, `db`, `compute`, `panel`, `webview`, `theme`, `sync`, `cost`
 
 | Command | Purpose |
 |---------|---------|
-| `npm test` | Run unit tests (Vitest, 159 tests) |
+| `npm test` | Run unit tests (Vitest, 183 tests) |
 | `npm run test:watch` | Watch mode for tests |
 | `npm run build` | Lint + test + package `.vsix` |
 | `npm run dev:vscode` | Build and install into VS Code |

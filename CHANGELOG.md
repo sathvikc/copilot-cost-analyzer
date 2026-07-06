@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 with the following constraint: **all versions are 0.x.x** (pre-1.0) while the
 extension is in active development.
 
+## [Unreleased]
+
+### Added
+- **Sources filter** — a multi-select dropdown beside the workspace filter for choosing which sources to show: 🖥 VS Code, 🟢 VS Code Insiders, ⌘ Copilot CLI, 📦 Remote / Dev Container. All are selected by default; the dropdown only appears when more than one source exists. The source is derived from each session's storage path, so existing rows work without a re-sync. (VS Code Insiders sessions were already being discovered — this makes them visible *as* Insiders.) The Dashboard respects the same filter.
+- **🧠 Copy AI Review Prompt** — one click in the session header copies a compact (~1–2k token), self-contained markdown pack: an instruction preamble, a glossary, measured session facts (tokens, cache hit, cost/AIC, premium requests, cache breaks by cause, retries, top tools), and a turn-by-turn digest with each turn's end state (completed/steered/stopped/edited) and verbatim prompts. Paste it into any AI agent to get evidence-based coaching on your usage habits — the agent never needs to parse megabytes of raw logs. Multi-day resumed sessions report "resumed over N days" instead of a misleading duration.
+- **Copilot CLI sessions** — sessions from the Copilot CLI (`~/.copilot/session-state/`, or `$COPILOT_HOME/session-state`) are now discovered and analyzed alongside VS Code chats, marked with a `⌘ CLI` badge. The CLI's `session.shutdown` event supplies ground-truth totals: **billed premium requests** (shown as a header pill — the actual usage-based-billing unit), real nano-AIU, and input / cache-read / cache-write / output token counts. A crashed CLI session without a shutdown record is stored as limited quality; nothing is fabricated. The per-call cache/retry tabs explain that the CLI logs no per-call breakdown.
+- **Interruption classification** — turns are now labeled by *how* they ended instead of a single "canceled" flag: **✏ edited & resent** (message removed from chat history), **⚡ steered** (you sent your next message mid-run; detected by the machine-fast ≤2s gap between the canceled run and the next request), **⏹ stopped** (Stop pressed), and **⚠ interrupted** (run ended with no recorded result). Signatures were verified against a ground-truth session and the full test-sample corpus; the research is documented in `docs/log-format-research.md`.
+- **`user_interruption` cache-break type** — a cache break on the first call after an interrupted/edited/steered turn is now attributed to the history rewrite that interruption caused, instead of being mis-labeled "Possible Eviction". A content-diff-confirmed byte-identical prefix still wins: those remain true evictions.
+- **Roadmap** (`docs/ROADMAP.md`) — the plan for turning causal data into per-session dollar insights and budget coaching for the usage-based-billing era.
+
+### Fixed
+- **Edited messages no longer render as "canceled"** — editing a sent message previously showed the same strikethrough/"canceled" label as pressing Stop; the two are now distinguished (only edited turns strike through, with an "edited & resent" badge).
+- **Steering no longer mislabels the interrupted turn** — a turn interrupted by your own follow-up message was flagged "canceled" while the explicitly-stopped turn next to it showed nothing; both now carry their correct badges.
+- **"Open Log" for non-debug-log sessions** — the button appended `/main.jsonl` to every source path; chatSessions/CLI sessions now open their actual log file.
+
 ## [0.9.0] - 2026-06-16
 
 ### Added

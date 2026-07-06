@@ -29,3 +29,5 @@ scripts/demo.db
 
 # Real DB backups (personal session data)
 scripts/db-backups/
+
+test-samples/

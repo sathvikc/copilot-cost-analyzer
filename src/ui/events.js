@@ -199,6 +199,22 @@ export function setupEventListeners(opts = {}) {
     document.querySelectorAll('.filter-dropdown').forEach(d => d.classList.remove('open'));
   });
 
+  // Sources filter (session list): delegate changes since the panel is rebuilt
+  // on every session-list render. Writing store.filterSources re-runs the
+  // filtered-sessions effect, which re-renders the list and the panel state.
+  document.getElementById('filter-source-panel')?.addEventListener('change', (e) => {
+    const panel = e.currentTarget;
+    const boxes = [...panel.querySelectorAll('input[type="checkbox"]:not(.select-all)')];
+    if (e.target.classList.contains('select-all')) {
+      boxes.forEach(cb => { cb.checked = e.target.checked; });
+    }
+    const checked = boxes.filter(cb => cb.checked).map(cb => cb.value);
+    // '' = all selected (also covers "none checked" → treat as all rather than
+    // showing an empty list the user can't recover from inside the dropdown).
+    store.filterSources = (checked.length === boxes.length || checked.length === 0)
+      ? '' : checked.join(',');
+  });
+
   // Reset filters
   document.getElementById('filter-reset')?.addEventListener('click', () => {
     document.querySelectorAll('#filter-aic input[type="checkbox"], #filter-activity input[type="checkbox"]').forEach(cb => cb.checked = true);

@@ -9,9 +9,10 @@ const fs = require('fs');
 const path = require('path');
 const { parseSessionDirectory } = require('../api/parser/mainJsonlParser');
 const { parseChatSessionFile, reconstructSession, messageText } = require('../api/parser/chatSessionParser');
+const { parseCliEventsFile } = require('../api/parser/cliEventsParser');
 const { loadPricing, computeCallCost } = require('../api/compute/costComputer');
 const { computeGlobalAicRatio, computeSessionMetrics, effectiveAicRatio } = require('../api/compute/sessionMetrics');
-const { getWorkspaceStoragePaths, findWorkspaceFile } = require('../utils/paths');
+const { getWorkspaceStoragePaths, getCopilotCliSessionPaths, findWorkspaceFile } = require('../utils/paths');
 const { createLogger } = require('../utils/logger');
 
 const log = createLogger('sync');
@@ -43,16 +44,21 @@ function resolveWorkspacePath(wsDir) {
 }
 
 /**
- * Discover all Copilot Chat sessions across all workspace storages.
+ * Discover all Copilot sessions: VS Code Chat (workspace storages) and
+ * Copilot CLI (~/.copilot/session-state).
  *
- * Two sources, in priority order:
+ * Three sources, in priority order:
  *   1. debug-logs/<id>/main.jsonl — full data (tokens, AIC, cache). `source: 'debug-logs'`.
  *   2. chatSessions/<id>.jsonl    — always-written fallback (estimated; no cache/AIC).
  *      `source: 'chatSessions'`. Only emitted for sessions NOT already covered by
  *      debug-logs (full data always wins).
+ *   3. session-state/<id>/events.jsonl — Copilot CLI sessions. `source: 'copilot-cli'`.
+ *      CLI session ids never collide with VS Code chat ids (separate stores).
  *
  * @param {string[]} [basePaths] - workspace storage roots (defaults to the live
  *   VS Code locations; injectable for tests).
+ * @param {string[]} [cliPaths] - CLI session-state roots (defaults to the live
+ *   ~/.copilot location; injectable for tests).
  * @returns {Array<{
  *   sessionId: string,
  *   workspaceHash: string,
@@ -64,13 +70,10 @@ function resolveWorkspacePath(wsDir) {
  *   chatSessionMtime?: number
  * }>}
  */
-function discoverSessions(basePaths) {
+function discoverSessions(basePaths, cliPaths) {
   // Scan ALL valid VS Code workspace storage paths (Stable + Insiders)
   if (basePaths === undefined) basePaths = getWorkspaceStoragePaths();
-
-  if (basePaths.length === 0) {
-    return [];
-  }
+  if (cliPaths === undefined) cliPaths = getCopilotCliSessionPaths();
 
   const sessions = [];
   const debugLogIds = new Set();   // sessions with full data — chatSessions must defer to these
@@ -135,6 +138,23 @@ function discoverSessions(basePaths) {
     }
   }
 
+  // Pass 3: Copilot CLI sessions (~/.copilot/session-state/<id>/events.jsonl).
+  for (const cliBase of cliPaths) {
+    for (const sessionId of listDirs(cliBase)) {
+      const eventsPath = path.join(cliBase, sessionId, 'events.jsonl');
+      if (!fs.existsSync(eventsPath)) continue;
+      const mtime = fs.statSync(eventsPath).mtimeMs;
+      sessions.push({
+        sessionId,
+        workspaceHash: 'copilot-cli',
+        workspacePath: null, // resolved from session.start during sync
+        source: 'copilot-cli',
+        cliEventsPath: eventsPath,
+        cliEventsMtime: Math.floor(mtime)
+      });
+    }
+  }
+
   return sessions;
 }
 
@@ -159,13 +179,20 @@ function findChatSessionFile(workspaceHash, sessionId) {
 /**
  * Reconstruct chatSessions canonical state for a debug-logs session: title,
  * mode, location, and the list of requests that SURVIVED in the user-facing chat
- * history (each with whether it was explicitly canceled).
+ * history, each with enough result/timing detail to classify HOW its turn ended.
  *
  * chatSessions is the source of truth for "what the conversation looks like
- * now". A turn can drop out of the timeline two ways, which we detect together
- * downstream (see computeCanceledTurns):
- *   - Explicit cancel (Stop): the request stays in the list with an
- *     errorDetails.code === 'canceled' result → flagged here via `canceled`.
+ * now". Verified signatures (test-samples ground truth, session 18d04628):
+ *   - Completed turn: `result` carries timings/metadata.
+ *   - Canceled turn:  `result.errorDetails.code === 'canceled'`. Set both when
+ *     the user presses Stop AND when a mid-run follow-up message interrupts the
+ *     turn (steering) — the two are told apart downstream by the gap between
+ *     this turn's end (`timestamp + timings.totalElapsed`) and the next
+ *     request's send time: steering restarts within ~1s (machine-driven), an
+ *     explicit Stop is followed at human speed (seconds to minutes), if at all.
+ *   - Interrupted turn: `result` written as `{}` (or never written) — the run
+ *     ended without the agent returning a result (Stop while the agent was in a
+ *     non-graceful state, or the window closed mid-run).
  *   - Edit-and-resend: editing a sent message REMOVES the original request from
  *     this list entirely (no marker) while the debug log still has it → detected
  *     downstream by its absence from `keptRequests`.
@@ -173,7 +200,9 @@ function findChatSessionFile(workspaceHash, sessionId) {
  * @param {string} sessionId
  * @param {string} workspaceHash
  * @returns {{ title: string|null, mode: string|null, initialLocation: string|null,
- *             keptRequests: Array<{ text: string, canceled: boolean }> }}
+ *             keptRequests: Array<{ text: string, canceled: boolean,
+ *               resultState: 'completed'|'canceled'|'unrecorded',
+ *               timestamp: number|null, elapsed: number|null, isLast: boolean }> }}
  */
 function parseChatSession(sessionId, workspaceHash) {
   const result = { title: null, mode: null, initialLocation: null, keptRequests: [] };
@@ -199,32 +228,77 @@ function parseChatSession(sessionId, workspaceHash) {
       if (!request || typeof request !== 'object') continue;
       const text = messageText(request);
       if (text == null) continue; // a request with no user text isn't a timeline turn
-      const canceled = request.result?.errorDetails?.code === 'canceled';
-      result.keptRequests.push({ text: text.trim(), canceled });
+      const res = request.result;
+      const canceled = res?.errorDetails?.code === 'canceled';
+      const resultState = canceled ? 'canceled'
+        : (res && typeof res === 'object' && Object.keys(res).length > 0) ? 'completed'
+        : 'unrecorded';
+      result.keptRequests.push({
+        text: text.trim(),
+        canceled,
+        resultState,
+        timestamp: typeof request.timestamp === 'number' ? request.timestamp : null,
+        elapsed: typeof res?.timings?.totalElapsed === 'number' ? res.timings.totalElapsed : null,
+        isLast: false // filled in below
+      });
+    }
+    if (result.keptRequests.length > 0) {
+      result.keptRequests[result.keptRequests.length - 1].isLast = true;
     }
   } catch { /* unreadable */ }
 
   return result;
 }
 
+// A canceled turn whose next request was sent within this window of the cancel
+// instant was interrupted BY that next message (steering): VS Code cancels the
+// in-flight run and dispatches the queued message machine-fast. Ground truth
+// across test-samples: steering gaps are 0.3–0.5s; explicit Stop → resend gaps
+// are ≥4.5s (human typing speed). The small negative allowance absorbs clock
+// skew between the cancel write and the next request's timestamp.
+const STEERING_GAP_MS = 2000;
+
 /**
- * Map debug-log user messages onto canceled/edited flags using the canonical
- * chatSessions request list. Returns a Set of 0-based indices into
- * `userMessages` (debug-log order) that should render struck-through.
+ * Classify how each debug-log user message's turn ended, by cross-referencing
+ * the canonical chatSessions request list. Returns a Map of 0-based indices
+ * into `userMessages` (debug-log order) → interruption type:
  *
- * Each kept request is matched to a debug-log message by exact (trimmed) text,
- * positionally within repeated texts. A debug-log message that finds no kept
- * counterpart was edited away; a matched-but-canceled request was stopped.
+ *   'edited'      — message was edited & resent: the original request is gone
+ *                   from chat history but still in the debug log.
+ *   'steered'     — turn was interrupted by the user's NEXT message sent
+ *                   mid-run (canceled marker + machine-fast follow-up).
+ *   'stopped'     — user pressed Stop (canceled marker, no machine-fast
+ *                   follow-up).
+ *   'interrupted' — the run ended without a recorded result (Stop in a
+ *                   non-graceful state, or the window closed mid-run).
+ *
+ * A message with no entry completed normally. The LAST request with an
+ * unrecorded result is never flagged — it may simply still be running.
  * When there is no canonical list to compare against (chatSessions missing /
  * unreadable), we flag nothing rather than guess.
  *
  * @param {Array<{content: string}>} userMessages - debug-log user messages, in order
- * @param {Array<{text: string, canceled: boolean}>} keptRequests
- * @returns {Set<number>}
+ * @param {Array<{text: string, canceled: boolean, resultState: string,
+ *   timestamp: number|null, elapsed: number|null, isLast: boolean}>} keptRequests
+ * @returns {Map<number, string>}
  */
-function computeCanceledTurns(userMessages, keptRequests) {
-  const canceled = new Set();
-  if (!Array.isArray(keptRequests) || keptRequests.length === 0) return canceled;
+function computeInterruptions(userMessages, keptRequests) {
+  const flags = new Map();
+  if (!Array.isArray(keptRequests) || keptRequests.length === 0) return flags;
+
+  // Pre-classify each kept request from chatSessions data alone.
+  const typeByRequest = new Map();
+  for (let j = 0; j < keptRequests.length; j++) {
+    const r = keptRequests[j];
+    if (r.resultState === 'canceled') {
+      const next = keptRequests[j + 1];
+      const endTs = r.timestamp !== null && r.elapsed !== null ? r.timestamp + r.elapsed : null;
+      const gap = next && next.timestamp !== null && endTs !== null ? next.timestamp - endTs : null;
+      typeByRequest.set(r, gap !== null && gap > -STEERING_GAP_MS && gap < STEERING_GAP_MS ? 'steered' : 'stopped');
+    } else if (r.resultState === 'unrecorded' && !r.isLast) {
+      typeByRequest.set(r, 'interrupted');
+    }
+  }
 
   // Bucket kept requests by text so repeated prompts match positionally.
   const buckets = new Map();
@@ -239,12 +313,13 @@ function computeCanceledTurns(userMessages, keptRequests) {
     const bucket = buckets.get(text);
     if (bucket && bucket.length > 0) {
       const match = bucket.shift();
-      if (match.canceled) canceled.add(i); // survived but was explicitly stopped
+      const type = typeByRequest.get(match);
+      if (type) flags.set(i, type);
     } else {
-      canceled.add(i); // present in the debug log, gone from chat history → edited away
+      flags.set(i, 'edited'); // in the debug log, gone from chat history → edited away
     }
   }
-  return canceled;
+  return flags;
 }
 
 /**
@@ -256,8 +331,9 @@ function computeCanceledTurns(userMessages, keptRequests) {
  * @param {number} [globalAicRatio] - Pre-computed AIC-per-token ratio for estimating missing AIC
  * @returns {Promise<boolean>} true if synced, false if skipped (up to date)
  */
-const PARSER_VERSION = 32; // bump when debug-logs parser logic changes to force re-sync
-const CHAT_PARSER_VERSION = 3; // bump when chatSessions parser logic changes to force re-sync
+const PARSER_VERSION = 33; // bump when debug-logs parser logic changes to force re-sync
+const CHAT_PARSER_VERSION = 4; // bump when chatSessions parser logic changes to force re-sync
+const CLI_PARSER_VERSION = 1; // bump when Copilot CLI parser logic changes to force re-sync
 
 // chatSessions records the assistant's response text but, for sessions captured
 // while Copilot debug-logging was off, no token counts. We can still *count*
@@ -270,6 +346,9 @@ async function syncSession(db, sessionInfo, globalAicRatio) {
   if (globalAicRatio === undefined) globalAicRatio = 0;
   if (sessionInfo.source === 'chatSessions') {
     return syncChatSession(db, sessionInfo, globalAicRatio);
+  }
+  if (sessionInfo.source === 'copilot-cli') {
+    return syncCliSession(db, sessionInfo, globalAicRatio);
   }
   return syncDebugLogSession(db, sessionInfo, globalAicRatio);
 }
@@ -318,10 +397,40 @@ async function syncDebugLogSession(db, sessionInfo, globalAicRatio) {
   }
 
   // Cross-reference debug-log user messages against the canonical chatSessions
-  // request list to flag turns that were canceled or edited away (struck through
-  // in the timeline). Computed in debug-log index space — the order
+  // request list to classify turns that were edited / steered / stopped /
+  // interrupted. Computed in debug-log index space — the order
   // insertUserMessages walks.
-  const canceledTurns = computeCanceledTurns(parsed.userMessages, chatData.keptRequests);
+  const interruptions = computeInterruptions(parsed.userMessages, chatData.keptRequests);
+
+  // An interruption rewrites conversation history: the aborted turn's partial
+  // messages are dropped or replaced before the next request, so the cached
+  // prompt prefix diverges there. When the parser's metadata ladder found no
+  // structural cause for a break on the NEXT turn's calls, the interruption IS
+  // the cause — reclassify it so the Cache tab stops blaming the provider.
+  // A confirmed byte-identical prefix (detail.kind === 'eviction') is left
+  // alone: the content provably didn't change, so the interruption is unrelated.
+  const interruptionByTurn = new Map();
+  for (const [idx, type] of interruptions) {
+    const msg = parsed.userMessages[idx];
+    if (msg && typeof msg.turnNumber === 'number') interruptionByTurn.set(msg.turnNumber, type);
+  }
+  if (interruptionByTurn.size > 0) {
+    for (const call of parsed.llmCalls) {
+      if (call.cacheBreakType !== 'provider_eviction' || call.isSubagent) continue;
+      const how = interruptionByTurn.get(call.turnNumber - 1);
+      if (!how) continue;
+      let detail = null;
+      try { detail = call.cacheBreakDetail ? JSON.parse(call.cacheBreakDetail) : null; } catch { /* keep null */ }
+      if (detail && detail.kind === 'eviction') continue;
+      call.cacheBreakType = 'user_interruption';
+      call.cacheBreakDetail = JSON.stringify({
+        kind: 'user_interruption',
+        interruptedTurn: call.turnNumber - 1,
+        how,
+        ...(detail && detail.kind === 'prefix_change' ? { at: detail.at } : {})
+      });
+    }
+  }
 
   // Load pricing
   const pricingPath = path.join(debugLogPath, 'models.json');
@@ -408,7 +517,7 @@ async function syncDebugLogSession(db, sessionInfo, globalAicRatio) {
     insertLlmCalls(db, parsed.llmCalls);
     insertToolCalls(db, parsed.toolCalls);
     insertModelSwitches(db, parsed.modelSwitches);
-    insertUserMessages(db, sessionId, parsed.userMessages, canceledTurns);
+    insertUserMessages(db, sessionId, parsed.userMessages, interruptions);
     insertAgentResponses(db, sessionId, parsed.agentResponses || []);
     insertDiscoveryEvents(db, sessionId, parsed.discoveryEvents || []);
 
@@ -526,8 +635,8 @@ async function syncChatSession(db, sessionInfo, globalAicRatio) { // eslint-disa
     insertLlmCalls(db, parsed.llmCalls);
     insertToolCalls(db, parsed.toolCalls);
     insertModelSwitches(db, parsed.modelSwitches);
-    // chatSessions carries no cancel cross-reference → no canceled turns.
-    insertUserMessages(db, sessionId, parsed.userMessages, new Set());
+    // chatSessions-only rows still know how each of their own turns ended.
+    insertUserMessages(db, sessionId, parsed.userMessages, parsed.interruptions || new Map());
     insertAgentResponses(db, sessionId, parsed.agentResponses || []);
 
     upsertSyncLog(db, {
@@ -543,9 +652,133 @@ async function syncChatSession(db, sessionInfo, globalAicRatio) { // eslint-disa
   return true;
 }
 
+/**
+ * Sync a single Copilot CLI session (~/.copilot/session-state/<id>/events.jsonl).
+ *
+ * The CLI logs no per-call input/cache tokens, but `session.shutdown` records
+ * GROUND-TRUTH totals: premium requests (the actual UBB billing unit),
+ * nano-AIU, and input / cache_read / cache_write / output token counts. When a
+ * shutdown event exists the session is 'full' quality (real totals, real AIC);
+ * a crashed/killed session without one is 'limited' (only per-message output
+ * tokens are known). Per-call cache analysis is impossible either way — only
+ * VS Code debug logs carry that.
+ *
+ * @param {Object} db - Database instance
+ * @param {Object} sessionInfo - From discoverSessions() with source 'copilot-cli'
+ * @param {number} globalAicRatio - AIC-per-token ratio for estimating sessions without shutdown totals
+ * @returns {Promise<boolean>} true if synced, false if skipped (up to date)
+ */
+async function syncCliSession(db, sessionInfo, globalAicRatio) {
+  const { sessionId, cliEventsPath, cliEventsMtime } = sessionInfo;
+
+  const currentFileSize = fs.existsSync(cliEventsPath) ? fs.statSync(cliEventsPath).size : 0;
+
+  const existing = db.queryOne(
+    'SELECT main_jsonl_mtime, file_size, parser_version FROM sync_log WHERE session_id = $sid',
+    { $sid: sessionId }
+  );
+  if (existing && existing.main_jsonl_mtime >= cliEventsMtime
+      && existing.file_size === currentFileSize && existing.parser_version === CLI_PARSER_VERSION) {
+    return false; // up to date
+  }
+
+  const parsed = parseCliEventsFile(cliEventsPath, sessionId);
+  if (parsed.llmCalls.length === 0 && parsed.userMessages.length === 0) {
+    return false; // nothing ran in this session
+  }
+
+  const totals = parsed.totals;
+  // Prefer modelMetrics (usage.inputTokens already includes cache reads/writes,
+  // matching the VS Code semantic where cached ⊆ input); fall back to summing
+  // the shutdown tokenDetails buckets.
+  let totalInputTokens = 0, totalOutputTokens = 0, totalCachedTokens = null, totalCacheWrite = null;
+  if (totals && totals.modelMetrics) {
+    for (const m of Object.values(totals.modelMetrics)) {
+      totalInputTokens += m.usage?.inputTokens || 0;
+      totalOutputTokens += m.usage?.outputTokens || 0;
+      totalCachedTokens = (totalCachedTokens || 0) + (m.usage?.cacheReadTokens || 0);
+      totalCacheWrite = (totalCacheWrite || 0) + (m.usage?.cacheWriteTokens || 0);
+    }
+  } else if (totals) {
+    totalInputTokens = (totals.inputTokens || 0) + (totals.cacheReadTokens || 0) + (totals.cacheWriteTokens || 0);
+    totalOutputTokens = totals.outputTokens || 0;
+    totalCachedTokens = totals.cacheReadTokens ?? null;
+    totalCacheWrite = totals.cacheWriteTokens ?? null;
+  } else {
+    // No shutdown event (crash/kill): only the per-message output counts exist.
+    totalOutputTokens = parsed.llmCalls.reduce((s, c) => s + c.outputTokens, 0);
+  }
+
+  const totalAic = totals?.nanoAiu ?? null;
+  const modelsUsed = new Set(parsed.llmCalls.map(c => c.model));
+
+  const metrics = computeSessionMetrics({
+    total_aic: totalAic,
+    total_input_tokens: totalInputTokens,
+    total_output_tokens: totalOutputTokens,
+    total_cached_tokens: totalCachedTokens
+  }, globalAicRatio, 0);
+
+  db.transaction(() => {
+    deleteSessionRows(db, sessionId);
+
+    insertSessionRow(db, {
+      $sid: sessionId,
+      $wh: 'copilot-cli',
+      $wp: parsed.workspacePath,
+      $title: parsed.firstPrompt || null,
+      $st: parsed.firstTs,
+      $et: parsed.lastTs,
+      $models: JSON.stringify([...modelsUsed]),
+      $calls: parsed.llmCalls.length,
+      $input: totalInputTokens,
+      $output: totalOutputTokens,
+      $cached: totalCachedTokens,
+      $cacheWrite: totalCacheWrite,
+      $cost: 0, // no token pricing catalog alongside CLI logs
+      $aic: totalAic,
+      $compAic: Math.round(metrics.computedAic),
+      $compCost: metrics.computedCost,
+      $isApprox: metrics.isAicApprox ? 1 : 0,
+      $cacheHit: metrics.cacheHitPct,
+      $subagentCounts: Object.keys(parsed.subagentCounts).length > 0
+        ? JSON.stringify(parsed.subagentCounts)
+        : null,
+      $quality: totals ? 'full' : 'limited',
+      $hasSwitch: parsed.modelSwitches.length > 0 ? 1 : 0,
+      $hasSub: parsed.hasSubagent ? 1 : 0,
+      $src: cliEventsPath,
+      $srcType: 'copilot-cli',
+      $prompt: parsed.firstPrompt || null,
+      $copilotVer: parsed.sessionMeta?.copilotVersion || null,
+      $vscodeVer: null,
+      $mode: 'cli',
+      $location: 'cli',
+      $premiumReq: totals?.premiumRequests ?? null
+    });
+
+    insertLlmCalls(db, parsed.llmCalls);
+    insertToolCalls(db, parsed.toolCalls);
+    insertModelSwitches(db, parsed.modelSwitches);
+    insertUserMessages(db, sessionId, parsed.userMessages, parsed.interruptions);
+    insertAgentResponses(db, sessionId, parsed.agentResponses || []);
+
+    upsertSyncLog(db, {
+      sessionId,
+      sourcePath: cliEventsPath,
+      mtime: cliEventsMtime,
+      totalLines: parsed.totalLines,
+      fileSize: currentFileSize,
+      parserVersion: CLI_PARSER_VERSION
+    });
+  });
+
+  return true;
+}
+
 /* ------------------------------------------------------------------ *
- * Shared row writers — used by both syncDebugLogSession and
- * syncChatSession so the two paths persist through identical SQL.
+ * Shared row writers — used by syncDebugLogSession, syncChatSession and
+ * syncCliSession so all paths persist through identical SQL.
  * ------------------------------------------------------------------ */
 
 /** Delete a session and all its child rows (explicit deletes + CASCADE backup). */
@@ -570,7 +803,7 @@ function insertSessionRow(db, fields) {
       computed_aic, computed_cost, is_aic_approx, cache_hit_pct,
       subagent_counts_json,
       data_quality, has_model_switch, has_subagent, source_path, source_type, first_prompt,
-      copilot_version, vscode_version, mode, initial_location
+      copilot_version, vscode_version, mode, initial_location, total_premium_requests
     ) VALUES (
       $sid, $wh, $wp, $title, $st, $et,
       $models, $calls, $input, $output,
@@ -578,9 +811,9 @@ function insertSessionRow(db, fields) {
       $compAic, $compCost, $isApprox, $cacheHit,
       $subagentCounts,
       $quality, $hasSwitch, $hasSub, $src, $srcType, $prompt,
-      $copilotVer, $vscodeVer, $mode, $location
+      $copilotVer, $vscodeVer, $mode, $location, $premiumReq
     )
-  `, fields);
+  `, { $premiumReq: null, ...fields });
 }
 
 /** Insert all LLM calls for a session. */
@@ -682,23 +915,26 @@ function insertModelSwitches(db, switches) {
 }
 
 /**
- * Insert user messages for a session. `canceledTurns` is a Set of 0-based turn
- * indices flagged canceled (debug-logs cross-reference); pass an empty Set when
- * there is no cancel data (chatSessions).
+ * Insert user messages for a session. `interruptions` is a Map of 0-based
+ * message index → interruption type ('edited' | 'steered' | 'stopped' |
+ * 'interrupted') from computeInterruptions; pass an empty Map when there is no
+ * cross-reference data. `is_canceled` stays populated (any interruption → 1)
+ * for backward compatibility with existing queries.
  */
-function insertUserMessages(db, sessionId, userMessages, canceledTurns) {
+function insertUserMessages(db, sessionId, userMessages, interruptions) {
   for (let i = 0; i < userMessages.length; i++) {
     const msg = userMessages[i];
-    const isCanceled = canceledTurns.has(i) ? 1 : 0;
+    const interruptionType = interruptions.get(i) || null;
     db.run(`
-      INSERT INTO user_messages (session_id, turn_number, content, timestamp, is_canceled)
-      VALUES ($sid, $turn, $content, $ts, $canceled)
+      INSERT INTO user_messages (session_id, turn_number, content, timestamp, is_canceled, interruption_type)
+      VALUES ($sid, $turn, $content, $ts, $canceled, $itype)
     `, {
       $sid: sessionId,
       $turn: msg.turnNumber || 0,
       $content: msg.content || null,
       $ts: msg.ts ? new Date(msg.ts).getTime() / 1000 : null,
-      $canceled: isCanceled
+      $canceled: interruptionType ? 1 : 0,
+      $itype: interruptionType
     });
   }
 }

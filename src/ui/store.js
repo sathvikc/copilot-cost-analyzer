@@ -44,6 +44,7 @@ export function initStore(stateFn) {
     // ── Filters (two-way bound to inputs via data-bind) ─────────────
     filterSearch: '',          // Free-text search
     filterWorkspace: '',       // Workspace path filter
+    filterSources: '',         // Comma-joined channels to show ('' = all): vscode,vscode-insiders,cli,remote
     filterDateFrom: '',        // Custom date range start
     filterDateTo: '',          // Custom date range end
     timePreset: 'all',         // 'today' | 'week' | 'month' | 'all' | 'custom'

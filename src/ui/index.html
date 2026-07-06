@@ -36,6 +36,12 @@
       <select id="filter-workspace" class="filter-select" data-bind="filterWorkspace" aria-label="Filter by workspace">
         <option value="">All workspaces</option>
       </select>
+
+      <div class="filter-dropdown hidden" id="filter-source">
+        <button class="filter-toggle btn btn-secondary btn-sm" aria-label="Filter by source"
+          aria-haspopup="true">Sources <span class="filter-count">All</span></button>
+        <div class="filter-panel" id="filter-source-panel" role="menu"></div>
+      </div>
     </div>
 
     <div class="filter-group time-controls">
@@ -265,9 +271,15 @@
               <span class="meta-pill">
                 <span class="meta-label">Time</span> <span id="detail-time-range"></span>
               </span>
+              <span id="detail-premium-pill" class="meta-pill hidden"
+                title="Billed premium requests reported by the Copilot CLI for this session — the actual usage-based-billing unit">
+                <span class="meta-label">Premium Requests</span> <span id="detail-premium-count"></span>
+              </span>
               <button id="btn-open-log" class="btn btn-secondary btn-sm hidden" aria-label="Open debug log">Open Log</button>
               <button id="btn-reveal-chat" class="btn btn-secondary btn-sm hidden" aria-label="Reveal chat session"
                 title="Open this chat session in the Copilot panel">💬 Reveal Chat</button>
+              <button id="btn-ai-review" class="btn btn-secondary btn-sm" aria-label="Copy AI review prompt"
+                title="Copy a compact, self-contained prompt describing this session — paste it into any AI agent to get coaching on your usage habits">🧠 Copy AI Review Prompt</button>
             </div>
           </div>
 

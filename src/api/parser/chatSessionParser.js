@@ -170,6 +170,52 @@ function detectCompression(result) {
   return null;
 }
 
+/**
+ * How a request's run ended, from its serialized `result`.
+ * Verified signatures (see docs/log-format-research.md):
+ *   'canceled'   — result.errorDetails.code === 'canceled' (Stop, or interrupted
+ *                  by a mid-run follow-up message = steering)
+ *   'completed'  — result carries timings/metadata
+ *   'unrecorded' — result written as {} or never written (Stop in a non-graceful
+ *                  state, or the window closed mid-run)
+ * @param {object} request
+ * @returns {'canceled'|'completed'|'unrecorded'}
+ */
+function requestEndState(request) {
+  const res = request?.result;
+  if (res?.errorDetails?.code === 'canceled') return 'canceled';
+  if (res && typeof res === 'object' && Object.keys(res).length > 0) return 'completed';
+  return 'unrecorded';
+}
+
+// A canceled request whose next request was sent within this window of the
+// cancel instant was interrupted BY that message (steering): VS Code cancels the
+// in-flight run and dispatches the queued message machine-fast (0.3–0.5s in the
+// ground-truth samples), whereas Stop → manual resend takes human seconds.
+const STEERING_GAP_MS = 2000;
+
+/**
+ * Classify how a request's turn was interrupted, if it was.
+ * @param {object} request
+ * @param {object|undefined} nextRequest - the following request, if any
+ * @param {boolean} isLast - whether this is the session's last request
+ * @returns {'steered'|'stopped'|'interrupted'|null} null = completed normally
+ */
+function classifyRequestEnd(request, nextRequest, isLast) {
+  const state = requestEndState(request);
+  if (state === 'canceled') {
+    const ts = typeof request.timestamp === 'number' ? request.timestamp : null;
+    const elapsed = typeof request.result?.timings?.totalElapsed === 'number'
+      ? request.result.timings.totalElapsed : null;
+    const nextTs = typeof nextRequest?.timestamp === 'number' ? nextRequest.timestamp : null;
+    const gap = ts !== null && elapsed !== null && nextTs !== null ? nextTs - (ts + elapsed) : null;
+    return gap !== null && gap > -STEERING_GAP_MS && gap < STEERING_GAP_MS ? 'steered' : 'stopped';
+  }
+  // The last request may simply still be running — never flag it on absence alone.
+  if (state === 'unrecorded' && !isLast) return 'interrupted';
+  return null;
+}
+
 /** Pull the user prompt text from a request's message. */
 function messageText(request) {
   const msg = request.message;
@@ -227,6 +273,7 @@ function parseChatSessionFile(filePath, sessionId) {
   const modelSwitches = [];
   const userMessages = [];
   const agentResponses = [];
+  const interruptions = new Map(); // userMessages index → interruption type
 
   let firstTs = null;
   let lastTs = null;
@@ -291,6 +338,9 @@ function parseChatSessionFile(filePath, sessionId) {
     // the timeline can't order the message after its own agent response.
     const text = messageText(request);
     if (text) {
+      const endType = classifyRequestEnd(request, session.requests[turnIndex + 1],
+        turnIndex === session.requests.length - 1);
+      if (endType) interruptions.set(userMessages.length, endType);
       userMessages.push({ content: text, ts: tsSec !== null ? tsSec * 1000 : null, turnNumber });
     }
 
@@ -367,6 +417,7 @@ function parseChatSessionFile(filePath, sessionId) {
     toolCalls,
     modelSwitches,
     userMessages,
+    interruptions,
     agentResponses,
     discoveryEvents: [],
     sessionMeta: { copilotVersion: null, vscodeVersion: null },
@@ -382,4 +433,4 @@ function parseChatSessionFile(filePath, sessionId) {
   };
 }
 
-module.exports = { parseChatSessionFile, reconstructSession, applyPatch, messageText };
+module.exports = { parseChatSessionFile, reconstructSession, applyPatch, messageText, requestEndState, classifyRequestEnd };

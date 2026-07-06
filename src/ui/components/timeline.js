@@ -90,6 +90,18 @@ function buildDetailHTML(e) {
 }
 
 /**
+ * Interruption badge per classified type. 'edited' renders struck-through (the
+ * message no longer exists in chat history); the other three keep the text
+ * readable — the message ran, only its response was cut short.
+ */
+const INTERRUPTION_LABELS = {
+  edited:      { label: 'edited & resent', icon: '✏', tip: 'You edited this message and resent it — the original run was discarded' },
+  steered:     { label: 'steered',         icon: '⚡', tip: 'You sent your next message while this was running — the agent was redirected mid-run' },
+  stopped:     { label: 'stopped',         icon: '⏹', tip: 'You pressed Stop during this turn' },
+  interrupted: { label: 'interrupted',     icon: '⚠', tip: 'This run ended without a recorded result (stopped, or the window closed mid-run)' }
+};
+
+/**
  * Render the timeline of turns and events.
  */
 export function renderTimeline() {
@@ -123,8 +135,11 @@ export function renderTimeline() {
     if (firstMsg) promptPreview = firstMsg.content;
     else if (turnNum === 1 && store.sessionDetail?.first_prompt) promptPreview = store.sessionDetail.first_prompt;
 
+    const interruption = INTERRUPTION_LABELS[turn.interruptionType] || (turn.isCanceled ? INTERRUPTION_LABELS.stopped : null);
+    const isEdited = turn.interruptionType === 'edited';
+
     const turnDiv = document.createElement('div');
-    turnDiv.className = 'timeline-turn' + (store.timelineExpanded ? '' : ' collapsed') + (aicClass ? ' ' + aicClass : '') + (turn.isCanceled ? ' canceled' : '');
+    turnDiv.className = 'timeline-turn' + (store.timelineExpanded ? '' : ' collapsed') + (aicClass ? ' ' + aicClass : '') + (interruption ? ' canceled' : '');
     turnDiv.dataset.tools = turn.toolNames || '';
     turnDiv.dataset.llmCalls = String(calls.length);
     turnDiv.dataset.hasUserMsg = String(hasUserMsg);
@@ -147,7 +162,7 @@ export function renderTimeline() {
     header.innerHTML = `
       <div class="turn-header-row">
         <span class="turn-chevron" aria-hidden="true">\u25BC</span>
-        <span class="turn-title">${turn.isCanceled ? `<span class="canceled-turn">Turn ${turnNum}</span> <span class="canceled-label">canceled</span>` : `Turn ${turnNum}`}</span>
+        <span class="turn-title">${interruption ? `<span class="${isEdited ? 'canceled-turn' : ''}">Turn ${turnNum}</span> <span class="canceled-label interruption-${turn.interruptionType || 'stopped'}" title="${escapeHtml(interruption.tip)}">${interruption.icon} ${interruption.label}</span>` : `Turn ${turnNum}`}</span>
         <span class="turn-summary-pills">
           ${retryPill}
           ${turnTools.length > 0 ? `<span class="turn-pill tool-pill" title="${turnTools.length} tool call${turnTools.length !== 1 ? 's' : ''}">\uD83D\uDD27 ${turnTools.length}</span>` : ''}

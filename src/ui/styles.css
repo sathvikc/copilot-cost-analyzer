@@ -916,6 +916,9 @@ img.setup-icon {
 }
 
 .filter-dropdown.open .filter-panel { display: block; }
+/* The Sources dropdown lives at the LEFT edge of the top bar — anchor its
+   panel left so it can't overflow off-screen. */
+#filter-source .filter-panel { left: 0; right: auto; }
 
 .filter-panel label {
   display: flex;
@@ -1007,6 +1010,10 @@ img.setup-icon {
   font-weight: 400;
   margin-left: 4px;
 }
+/* Per-type interruption tints: edited/stopped read as error (work discarded),
+   steered as accent (deliberate redirect), interrupted as warning (unknown). */
+.canceled-label.interruption-steered { color: var(--accent); }
+.canceled-label.interruption-interrupted { color: var(--warning); }
 
 .turn-prompt-line {
   font-size: var(--font-size-xs);
