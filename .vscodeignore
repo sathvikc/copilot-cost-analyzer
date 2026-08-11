@@ -5,6 +5,7 @@ dist/
 
 # Tests and test data
 tests/
+test-samples/
 src/**/*.test.js
 coverage/
 

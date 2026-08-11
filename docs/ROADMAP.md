@@ -88,6 +88,15 @@ what it needs" exports:
   the "teach users to use AI models without burning tokens" goal, using their
   data instead of abstract advice.
 - **Status-bar burn meter** (month-to-date credits, click → dashboard).
+- **Timed habit nudges — on our own surfaces.** Verified (VS Code source
+  `chatTipCatalog.ts` + the shipped Insiders bundle): the Copilot Chat tips
+  area is fed by a compile-time `TIP_CATALOG` inside the workbench;
+  `IChatTipService` is core-internal with no extension API, contribution
+  point, or product/experiment feed — extensions cannot inject tips there.
+  So timed nudges ("your cache expired 3× today") must use extension-owned
+  surfaces: `showInformationMessage` with actions, a status-bar lightbulb,
+  or a tips strip in our panel. (Getting a tip added for *everyone* is a PR
+  to microsoft/vscode's catalog, not an extension feature.)
 - **Export/report** — weekly Markdown cost report (per workspace, per model,
   top waste causes) for team leads under org budget caps.
 - **JetBrains/Visual Studio parity research** — same chatSessions format?
