@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 with the following constraint: **all versions are 0.x.x** (pre-1.0) while the
 extension is in active development.
 
+## [Unreleased]
+
+### Fixed
+- **Sessions are found on remote hosts (dev tunnels, Remote-SSH, WSL)** — the extension now always scans the workspace storage that belongs to the VS Code instance it is running in, in addition to the standard desktop locations. Previously that location was only used when no standard folder existed, so on a remote host where a standard-looking folder was present, the real Copilot logs were missed.
+
 ## [0.9.0] - 2026-06-16
 
 ### Added

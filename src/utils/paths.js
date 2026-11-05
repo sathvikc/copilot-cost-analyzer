@@ -9,10 +9,10 @@ const fs = require('fs');
 const path = require('path');
 
 /**
- * Fallback workspaceStorage base derived from the extension's own globalStorage
- * path. Only used when none of the hardcoded platform candidates exist on disk
- * (e.g. inside a dev container / VS Code Server, where data lives under
- * ~/.vscode-server/data/User/... instead of the standard desktop locations).
+ * workspaceStorage base derived from the extension's own globalStorage path.
+ * Covers installs where data lives outside the standard desktop locations
+ * (e.g. VS Code Server in a dev container, SSH/tunnel remote, or a custom
+ * --user-data-dir), such as ~/.vscode-server/data/User/workspaceStorage.
  * @type {string|null}
  */
 let derivedBase = null;
@@ -38,9 +38,12 @@ function setGlobalStorageBase(globalStorageFsPath) {
  * Returns paths that actually exist on disk (may be 0, 1, or multiple if both
  * Stable and Insiders are installed).
  *
- * Standard desktop installs always match a hardcoded candidate, so behavior
- * there is unchanged. Only when nothing matches (dev container / non-standard
- * install) do we fall back to the path derived via setGlobalStorageBase().
+ * The location derived via setGlobalStorageBase() is always included when it
+ * exists, in addition to the hardcoded desktop candidates. On remote hosts
+ * (Remote-SSH, dev tunnels, WSL, dev containers) the real data lives under
+ * ~/.vscode-server/... or ~/.vscode/cli/..., and a standard-looking desktop
+ * directory may also be present, so it can't be treated as a mutually
+ * exclusive fallback. Duplicates are removed.
  * @returns {string[]}
  */
 function getWorkspaceStoragePaths() {
@@ -55,14 +58,16 @@ function getWorkspaceStoragePaths() {
     ] : []),
     path.join(home, '.config/Code/User/workspaceStorage'),                                 // Linux
     path.join(home, '.config/Code - Insiders/User/workspaceStorage'),                      // Linux Insiders
+    ...(derivedBase ? [derivedBase] : []),                                                 // Remote / dev container / custom user-data-dir
   ];
-  const existing = candidates.filter(p => fs.existsSync(p));
-  if (existing.length > 0) return existing;
 
-  // Fallback: no standard location matched (e.g. dev container). Use the path
-  // derived from the extension's own globalStorage, if it exists on disk.
-  if (derivedBase && fs.existsSync(derivedBase)) return [derivedBase];
-  return [];
+  const seen = new Set();
+  return candidates.filter(p => {
+    const key = path.resolve(p);
+    if (seen.has(key) || !fs.existsSync(p)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /**
